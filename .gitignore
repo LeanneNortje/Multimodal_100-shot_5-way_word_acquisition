@@ -1,0 +1,7 @@
+data/
+model_metadata/
+pretrained/
+pretrained_cpc/
+support_set/
+*/__pycache__/*
+*/__pycache__/*.pyc
