@@ -233,233 +233,235 @@ def get_gt_token_duration(target_dur, valid_gt_trn):
         token_dur.append((start_end, tok.casefold()))
     return token_dur
 
-parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-parser.add_argument("--resume", action="store_true", dest="resume",
-        help="load from exp_dir if True")
-parser.add_argument("--config-file", type=str, default='matchmap', choices=['matchmap'], help="Model config file.")
-parser.add_argument("--restore-epoch", type=int, default=-1, help="Epoch to generate accuracies for.")
-parser.add_argument("--image-base", default="/storage", help="Model config file.")
-command_line_args = parser.parse_args()
-restore_epoch = command_line_args.restore_epoch
 
-# Setting up model specifics
-heading(f'\nSetting up model files ')
-args, image_base = modelSetup(command_line_args, True)
-rank = 'cuda'
- 
-concepts = []
-with open('./data/test_keywords.txt', 'r') as f:
-    for keyword in f:
-        concepts.append(keyword.strip())
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument("--resume", action="store_true", dest="resume",
+            help="load from exp_dir if True")
+    parser.add_argument("--config-file", type=str, default='matchmap', choices=['matchmap'], help="Model config file.")
+    parser.add_argument("--restore-epoch", type=int, default=-1, help="Epoch to generate accuracies for.")
+    parser.add_argument("--image-base", default="/storage", help="Model config file.")
+    command_line_args = parser.parse_args()
+    restore_epoch = command_line_args.restore_epoch
 
-alignments = {}
-prev = ''
-prev_wav = ''
-prev_start = 0
-with open(Path('../Datasets/spokencoco/SpokenCOCO/words.txt'), 'r') as f:
-    for line in f:
-        wav, start, stop, label = line.strip().split()
-        if label in concepts or (label == 'hydrant' and prev == 'fire' and wav == prev_wav):
-            if wav not in alignments: alignments[wav] = {}
-            if label == 'hydrant' and prev == 'fire': 
-                label = prev + " " + label
-                start = prev_start
-            if label not in alignments[wav]: alignments[wav][label] = (int(float(start)*100), int(float(stop)*100))
-        prev = label
-        prev_wav = wav
-        prev_start = start
+    # Setting up model specifics
+    heading(f'\nSetting up model files ')
+    args, image_base = modelSetup(command_line_args, True)
+    rank = 'cuda'
+     
+    concepts = []
+    with open('./data/test_keywords.txt', 'r') as f:
+        for keyword in f:
+            concepts.append(keyword.strip())
 
-audio_conf = args["audio_config"]
-target_length = audio_conf.get('target_length', 1024)
-padval = audio_conf.get('padval', 0)
-image_conf = args["image_config"]
-crop_size = image_conf.get('crop_size')
-center_crop = image_conf.get('center_crop')
-RGB_mean = image_conf.get('RGB_mean')
-RGB_std = image_conf.get('RGB_std')
+    alignments = {}
+    prev = ''
+    prev_wav = ''
+    prev_start = 0
+    with open(Path('../Datasets/spokencoco/SpokenCOCO/words.txt'), 'r') as f:
+        for line in f:
+            wav, start, stop, label = line.strip().split()
+            if label in concepts or (label == 'hydrant' and prev == 'fire' and wav == prev_wav):
+                if wav not in alignments: alignments[wav] = {}
+                if label == 'hydrant' and prev == 'fire': 
+                    label = prev + " " + label
+                    start = prev_start
+                if label not in alignments[wav]: alignments[wav][label] = (int(float(start)*100), int(float(stop)*100))
+            prev = label
+            prev_wav = wav
+            prev_start = start
 
-# image_resize_and_crop = transforms.Compose(
-#         [transforms.Resize(224), transforms.ToTensor()])
-resize = transforms.Resize((256, 256))
-to_tensor = transforms.ToTensor()
-image_normalize = transforms.Normalize(mean=RGB_mean, std=RGB_std)
+    audio_conf = args["audio_config"]
+    target_length = audio_conf.get('target_length', 1024)
+    padval = audio_conf.get('padval', 0)
+    image_conf = args["image_config"]
+    crop_size = image_conf.get('crop_size')
+    center_crop = image_conf.get('center_crop')
+    RGB_mean = image_conf.get('RGB_mean')
+    RGB_std = image_conf.get('RGB_std')
 
-image_resize = transforms.transforms.Resize((256, 256))
-trans = transforms.ToPILImage()
+    # image_resize_and_crop = transforms.Compose(
+    #         [transforms.Resize(224), transforms.ToTensor()])
+    resize = transforms.Resize((256, 256))
+    to_tensor = transforms.ToTensor()
+    image_normalize = transforms.Normalize(mean=RGB_mean, std=RGB_std)
 
-# Create models
-audio_model = mutlimodal(args).to(rank)
+    image_resize = transforms.transforms.Resize((256, 256))
+    trans = transforms.ToPILImage()
 
-seed_model = alexnet(pretrained=True)
-image_model = nn.Sequential(*list(seed_model.features.children()))
+    # Create models
+    audio_model = mutlimodal(args).to(rank)
 
-last_layer_index = len(list(image_model.children()))
-image_model.add_module(str(last_layer_index),
-    nn.Conv2d(256, args["audio_model"]["embedding_dim"], kernel_size=(3,3), stride=(1,1), padding=(1,1)))
-image_model = image_model.to(rank)
+    seed_model = alexnet(pretrained=True)
+    image_model = nn.Sequential(*list(seed_model.features.children()))
 
-attention = ScoringAttentionModule(args).to(rank)
-contrastive_loss = ContrastiveLoss(args).to(rank)
+    last_layer_index = len(list(image_model.children()))
+    image_model.add_module(str(last_layer_index),
+        nn.Conv2d(256, args["audio_model"]["embedding_dim"], kernel_size=(3,3), stride=(1,1), padding=(1,1)))
+    image_model = image_model.to(rank)
 
-model_with_params_to_update = {
-    "audio_model": audio_model,
-    "attention": attention,
-    "contrastive_loss": contrastive_loss,
-    "image_model": image_model
-    }
-model_to_freeze = {
-    }
-trainable_parameters = getParameters(model_with_params_to_update, model_to_freeze, args)
+    attention = ScoringAttentionModule(args).to(rank)
+    contrastive_loss = ContrastiveLoss(args).to(rank)
 
-if args["optimizer"] == 'sgd':
-    optimizer = torch.optim.SGD(
-        trainable_parameters, args["learning_rate_scheduler"]["initial_learning_rate"],
-        momentum=args["momentum"], weight_decay=args["weight_decay"]
-        )
-elif args["optimizer"] == 'adam':
-    optimizer = torch.optim.Adam(
-        trainable_parameters, args["learning_rate_scheduler"]["initial_learning_rate"],
-        weight_decay=args["weight_decay"]
-        )
-else:
-    raise ValueError('Optimizer %s is not supported' % args["optimizer"])
+    model_with_params_to_update = {
+        "audio_model": audio_model,
+        "attention": attention,
+        "contrastive_loss": contrastive_loss,
+        "image_model": image_model
+        }
+    model_to_freeze = {
+        }
+    trainable_parameters = getParameters(model_with_params_to_update, model_to_freeze, args)
 
-scaler = torch.cuda.amp.GradScaler()
+    if args["optimizer"] == 'sgd':
+        optimizer = torch.optim.SGD(
+            trainable_parameters, args["learning_rate_scheduler"]["initial_learning_rate"],
+            momentum=args["momentum"], weight_decay=args["weight_decay"]
+            )
+    elif args["optimizer"] == 'adam':
+        optimizer = torch.optim.Adam(
+            trainable_parameters, args["learning_rate_scheduler"]["initial_learning_rate"],
+            weight_decay=args["weight_decay"]
+            )
+    else:
+        raise ValueError('Optimizer %s is not supported' % args["optimizer"])
 
-audio_model = DDP(audio_model, device_ids=[rank])
-image_model = DDP(image_model, device_ids=[rank])
-attention = DDP(attention, device_ids=[rank])
+    scaler = torch.cuda.amp.GradScaler()
 
-if "restore_epoch" in args:
-    info, start_epoch, global_step, best_epoch, best_acc = loadModelAttriburesAndTrainingAtEpochAMP(
-        args["exp_dir"], audio_model, image_model, attention, contrastive_loss, optimizer, rank, 
-        args["restore_epoch"]
-        )
-else: 
-    heading(f'\nRetoring model parameters from best epoch ')
-    info, epoch, global_step, best_epoch, best_acc = loadModelAttriburesAndTrainingAMP(
-        args["exp_dir"], audio_model, image_model, attention, contrastive_loss, optimizer, 
-        rank, False
-        )
+    audio_model = DDP(audio_model, device_ids=[rank])
+    image_model = DDP(image_model, device_ids=[rank])
+    attention = DDP(attention, device_ids=[rank])
 
-image_base = Path('../Datasets/spokencoco/')
-episodes = np.load(args["episodes_test"], allow_pickle=True)['episodes'].item()
+    if "restore_epoch" in args:
+        info, start_epoch, global_step, best_epoch, best_acc = loadModelAttriburesAndTrainingAtEpochAMP(
+            args["exp_dir"], audio_model, image_model, attention, contrastive_loss, optimizer, rank, 
+            args["restore_epoch"]
+            )
+    else: 
+        heading(f'\nRetoring model parameters from best epoch ')
+        info, epoch, global_step, best_epoch, best_acc = loadModelAttriburesAndTrainingAMP(
+            args["exp_dir"], audio_model, image_model, attention, contrastive_loss, optimizer, 
+            rank, False
+            )
 
-with torch.no_grad():
+    image_base = Path('../Datasets/spokencoco/')
+    episodes = np.load(args["episodes_test"], allow_pickle=True)['episodes'].item()
 
-    matching_set_images = []
-    matching_set_labels = []
-    im_used = set()
-    counting = {}
-    print(len(episodes['matching_set']))
-    for im in tqdm(episodes['matching_set']):
+    with torch.no_grad():
 
-        imgpath = image_base / im
-        this_image = LoadImage(imgpath, resize, image_normalize, to_tensor)
-        this_image_output = image_model(this_image.unsqueeze(0).to(rank))
-        this_image_output = this_image_output.view(this_image_output.size(0), this_image_output.size(1), -1).transpose(1, 2)
-        # this_image_output = this_image_output.mean(dim=1)
-        matching_set_images.append(this_image_output)
-        matching_set_labels.append(episodes['matching_set'][im])
-        
-        for w in list(episodes['matching_set'][im]):
-            if w not in concepts: continue
-            if w not in counting: counting[w] = 0
-            counting[w] += 1
-            # if counting[w] == 10: break
+        matching_set_images = []
+        matching_set_labels = []
+        im_used = set()
+        counting = {}
+        print(len(episodes['matching_set']))
+        for im in tqdm(episodes['matching_set']):
 
-    print(counting)
-
-    matching_set_images = torch.cat(matching_set_images, axis=0)
-
-    acc = []
-    for i_test in range(5):
-        print(f'\nTest number {i_test+1}-----------------------------------')
-        results = {}
-        cos = nn.CosineSimilarity(dim=1, eps=1e-6)
-
-        queries = {}
-        query_names = {}
-
-        episode_names = list(episodes.keys())
-        episode_names.remove('matching_set')
-
-        episode_names = np.random.choice(episode_names, 100, replace=False)
-
-
-        for episode_num in tqdm(episode_names):
-
-            episode = episodes[episode_num]
-            for w in episode['queries']:
-                if w not in results: results[w] = {'correct': 0, 'total': 0}
-                wav, spkr = episode['queries'][w]
-
-                lookup = str(Path(wav).stem)
-                if lookup in alignments:
-                    if w in alignments[lookup]:
-
-                        this_english_audio_feat, this_english_nframes = LoadAudio(image_base / 'SpokenCOCO' / wav, alignments[lookup][w], audio_conf)
-                        this_english_audio_feat, this_english_nframes = PadFeat(this_english_audio_feat, target_length, padval)
-                        _, _, this_english_output = audio_model(this_english_audio_feat.to(rank))
-                        this_english_nframes = NFrames(this_english_audio_feat, this_english_output, this_english_nframes)  
-                        # this_english_output = this_english_output[:, :, 0:this_english_nframes].mean(dim=-1)
-
-                        if w not in queries: queries[w] = []
-                        if w not in query_names: query_names[w] = []
-
-                        if len(queries[w]) < 20 and lookup not in query_names[w]: 
-                            queries[w].append((this_english_output, this_english_nframes))
-                            query_names[w].append(lookup)
-
-        for w in query_names: print(w, len(queries[w]), len(set(query_names[w])))
-                        
-        c = 0
-        t = 0                            
-        for w in queries:
-            # if w not in ['broccoli', 'zebra', 'kite', 'sheep']: continue
-            correct = 0
-            total = 0
-
-            query = []
-            n_frames = []
-            for q, n_f in queries[w]:
-                query.append(q)
-                n_frames.append(n_f)
-
-            query = torch.cat(query, dim=0)
-            n_frames = torch.cat(n_frames, dim=0)
-            query = torch.mean(query, 0).unsqueeze(0)
-            n_frames = torch.max(n_frames).item()
-
-            scores = attention.module.one_to_many_score(matching_set_images, query, n_frames).squeeze()
-            # scores = torch.zeros((matching_set_images.size(0)))
-            # for m_num in range(matching_set_images.size(0)): 
-            #     scores[m_num] = cos(matching_set_images[m_num, :].unsqueeze(0), query)
+            imgpath = image_base / im
+            this_image = LoadImage(imgpath, resize, image_normalize, to_tensor)
+            this_image_output = image_model(this_image.unsqueeze(0).to(rank))
+            this_image_output = this_image_output.view(this_image_output.size(0), this_image_output.size(1), -1).transpose(1, 2)
+            # this_image_output = this_image_output.mean(dim=1)
+            matching_set_images.append(this_image_output)
+            matching_set_labels.append(episodes['matching_set'][im])
             
+            for w in list(episodes['matching_set'][im]):
+                if w not in concepts: continue
+                if w not in counting: counting[w] = 0
+                counting[w] += 1
+                # if counting[w] == 10: break
+
+        print(counting)
+
+        matching_set_images = torch.cat(matching_set_images, axis=0)
+
+        acc = []
+        for i_test in range(5):
+            print(f'\nTest number {i_test+1}-----------------------------------')
+            results = {}
+            cos = nn.CosineSimilarity(dim=1, eps=1e-6)
+
+            queries = {}
+            query_names = {}
+
+            episode_names = list(episodes.keys())
+            episode_names.remove('matching_set')
+
+            episode_names = np.random.choice(episode_names, 100, replace=False)
 
 
-            indices = torch.argsort(scores, descending=True)[0: counting[w]]
-            for ind in range(counting[w]):
+            for episode_num in tqdm(episode_names):
+
+                episode = episodes[episode_num]
+                for w in episode['queries']:
+                    if w not in results: results[w] = {'correct': 0, 'total': 0}
+                    wav, spkr = episode['queries'][w]
+
+                    lookup = str(Path(wav).stem)
+                    if lookup in alignments:
+                        if w in alignments[lookup]:
+
+                            this_english_audio_feat, this_english_nframes = LoadAudio(image_base / 'SpokenCOCO' / wav, alignments[lookup][w], audio_conf)
+                            this_english_audio_feat, this_english_nframes = PadFeat(this_english_audio_feat, target_length, padval)
+                            _, _, this_english_output = audio_model(this_english_audio_feat.to(rank))
+                            this_english_nframes = NFrames(this_english_audio_feat, this_english_output, this_english_nframes)  
+                            # this_english_output = this_english_output[:, :, 0:this_english_nframes].mean(dim=-1)
+
+                            if w not in queries: queries[w] = []
+                            if w not in query_names: query_names[w] = []
+
+                            if len(queries[w]) < 20 and lookup not in query_names[w]: 
+                                queries[w].append((this_english_output, this_english_nframes))
+                                query_names[w].append(lookup)
+
+            for w in query_names: print(w, len(queries[w]), len(set(query_names[w])))
+                            
+            c = 0
+            t = 0                            
+            for w in queries:
+                # if w not in ['broccoli', 'zebra', 'kite', 'sheep']: continue
+                correct = 0
+                total = 0
+
+                query = []
+                n_frames = []
+                for q, n_f in queries[w]:
+                    query.append(q)
+                    n_frames.append(n_f)
+
+                query = torch.cat(query, dim=0)
+                n_frames = torch.cat(n_frames, dim=0)
+                query = torch.mean(query, 0).unsqueeze(0)
+                n_frames = torch.max(n_frames).item()
+
+                scores = attention.module.one_to_many_score(matching_set_images, query, n_frames).squeeze()
+                # scores = torch.zeros((matching_set_images.size(0)))
+                # for m_num in range(matching_set_images.size(0)): 
+                #     scores[m_num] = cos(matching_set_images[m_num, :].unsqueeze(0), query)
                 
-                # for c in matching_set_labels[indices[ind]]:
 
-                #     if re.search(w, c) is not None:
-                #         print(ind, scores[indices[ind]])
-                if w in matching_set_labels[indices[ind]]: 
-                    # print(ind)
-                    correct += 1
-                total += 1
-                # if ind == 5: break
 
-            c += correct
-            t += total
-            percentage = 100*correct/total
-            print(f'{w}: {correct}/{total}={percentage:<.2f}%')
-        percentage = c/t
-        print(f'Overall: {c}/{t}={percentage}={100*percentage:<.2f}%')
+                indices = torch.argsort(scores, descending=True)[0: counting[w]]
+                for ind in range(counting[w]):
+                    
+                    # for c in matching_set_labels[indices[ind]]:
 
-        acc.append(100*percentage)
+                    #     if re.search(w, c) is not None:
+                    #         print(ind, scores[indices[ind]])
+                    if w in matching_set_labels[indices[ind]]: 
+                        # print(ind)
+                        correct += 1
+                    total += 1
+                    # if ind == 5: break
 
-    avg = np.mean(np.asarray(acc))
-    var = np.std(np.asarray(acc))
-    print(f'\nOverall mean {avg}% and std {var}%')
+                c += correct
+                t += total
+                percentage = 100*correct/total
+                print(f'{w}: {correct}/{total}={percentage:<.2f}%')
+            percentage = c/t
+            print(f'Overall: {c}/{t}={percentage}={100*percentage:<.2f}%')
+
+            acc.append(100*percentage)
+
+        avg = np.mean(np.asarray(acc))
+        var = np.std(np.asarray(acc))
+        print(f'\nOverall mean {avg}% and std {var}%')
