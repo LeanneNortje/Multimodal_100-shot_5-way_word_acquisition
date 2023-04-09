@@ -6,6 +6,8 @@ Download [our data folder containing the exact test episodes we use](https://dri
 
 Download [trained model weights](https://drive.google.com/file/d/17fatYvXIZRephWx8MPhtGg_BbE1EOpgp/view?usp=sharing) and extract this folder in the project main folder.
 
-To train a model, run the python script ```run.py'''.
-To test the few-shot classification task, run the python script ```few-shot_task.py'''.
-To test the few-shot retrieval task, run the python script ```test_DH_few_shot_test_with_sampled_queries.py'''.
+To train a model, run the python script ```run.py```.
+
+To test the few-shot classification task, run the python script ```few-shot_task.py```.
+
+To test the few-shot retrieval task, run the python script ```test_DH_few_shot_test_with_sampled_queries.py```.
