@@ -238,7 +238,7 @@ parser.add_argument("--resume", action="store_true", dest="resume",
         help="load from exp_dir if True")
 parser.add_argument("--config-file", type=str, default='matchmap', choices=['matchmap'], help="Model config file.")
 parser.add_argument("--restore-epoch", type=int, default=-1, help="Epoch to generate accuracies for.")
-parser.add_argument("--image-base", default="/storage", help="Model config file.")
+parser.add_argument("--image-base", default="..", help="Model config file.")
 command_line_args = parser.parse_args()
 restore_epoch = command_line_args.restore_epoch
 
@@ -264,7 +264,7 @@ with open(Path('../Datasets/spokencoco/SpokenCOCO/words.txt'), 'r') as f:
             if label == 'hydrant' and prev == 'fire': 
                 label = prev + " " + label
                 start = prev_start
-            if label not in alignments[wav]: alignments[wav][label] = (int(float(start)*50), int(float(stop)*50))
+            if label not in alignments[wav]: alignments[wav][label] = (int(float(start)*100), int(float(stop)*100))
         prev = label
         prev_wav = wav
         prev_start = start
@@ -342,52 +342,34 @@ else:
         rank, False
         )
 
+audio_model.eval()
+image_model.eval()
+attention.eval()
+contrastive_loss.eval()
 image_base = Path('../Datasets/spokencoco/')
 episodes = np.load(args["episodes_test"], allow_pickle=True)['episodes'].item()
 
 with torch.no_grad():
-
-
     acc = []
-    for i_test in range(5):
+    for i_test in range(1):
         print(f'\nTest number {i_test+1}-----------------------------------')
         results = {}
         cos = nn.CosineSimilarity(dim=1, eps=1e-6)
 
+        queries = {}
+        query_names = {}
+
         episode_names = list(episodes.keys())
         episode_names.remove('matching_set')
-        np.random.shuffle(episode_names)
 
+        # episode_names = np.random.choice(episode_names, 100, replace=False)
 
-        for episode_num in tqdm(episode_names):
+        for episode_num in tqdm(sorted(episode_names)):
 
-            queries = []
-            query_nframes = []
-            query_names = []
-            query_labels = []
             episode = episodes[episode_num]
-
-            for w in episode['queries']:
-                if w not in results: results[w] = {'correct': 0, 'total': 0}
-                wav, spkr = episode['queries'][w]
-                lookup = str(Path(wav).stem)
-                this_english_audio_feat, this_english_nframes = LoadAudio(image_base / 'SpokenCOCO' / wav, alignments[lookup][w], audio_conf)
-                this_english_audio_feat, this_english_nframes = PadFeat(this_english_audio_feat, target_length, padval)
-                _, _, this_english_output = audio_model(this_english_audio_feat.to(rank))
-                this_english_nframes = NFrames(this_english_audio_feat, this_english_output, this_english_nframes)  
-                # this_english_output = this_english_output[:, :, 0:this_english_nframes].mean(dim=-1)
-
-                queries.append(this_english_output)
-                query_nframes.append(this_english_nframes)
-                query_names.append(lookup)
-                query_labels.append(w)
-
-            queries = torch.cat(queries, axis=0)
-            query_nframes = torch.cat(query_nframes, axis=0)
-
-            matching_set_images = []
-            matching_set_labels = []
-            im_used = set()
+            
+            m_images = []
+            m_labels = []
             counting = {}
 
             for w in episode['matching_set']:
@@ -397,29 +379,41 @@ with torch.no_grad():
                 this_image_output = image_model(this_image.unsqueeze(0).to(rank))
                 this_image_output = this_image_output.view(this_image_output.size(0), this_image_output.size(1), -1).transpose(1, 2)
                 # this_image_output = this_image_output.mean(dim=1)
-                matching_set_images.append(this_image_output)
-                matching_set_labels.append(w)
-                
-            #     for w in list(episodes['matching_set'][im]):
-            #         if w not in concepts: continue
-            #         if w not in counting: counting[w] = 0
-            #         counting[w] += 1
-            #         # if counting[w] == 10: break
+                m_images.append(this_image_output)
+                m_labels.append(w)
 
-            # print(counting)
+            for w in list(episode['matching_set']):
+                if w not in concepts: continue
+                if w not in counting: counting[w] = 0
+                counting[w] += 1
+                # if counting[w] == 10: break
 
-            matching_set_images = torch.cat(matching_set_images, axis=0)
+            m_images = torch.cat(m_images, axis=0)
+    
+            for w in episode['queries']:
+                if w not in results: results[w] = {'correct': 0, 'total': 0}
+                wav, spkr = episode['queries'][w]
 
-            for q_num in range(queries.size(0)):
+                lookup = str(Path(wav).stem)
+                if lookup in alignments:
+                    if w in alignments[lookup]:
 
-                scores = attention.module.one_to_many_score(matching_set_images, queries[q_num, :, :].unsqueeze(0), query_nframes[q_num]).squeeze()
-                index = torch.argmax(scores).item()
-                
-                if query_labels[q_num] == matching_set_labels[index]: results[query_labels[q_num]]['correct'] += 1
-                results[query_labels[q_num]]['total'] += 1
+                        this_english_audio_feat, this_english_nframes = LoadAudio(image_base / 'SpokenCOCO' / wav, alignments[lookup][w], audio_conf)
+                        this_english_audio_feat, this_english_nframes = PadFeat(this_english_audio_feat, target_length, padval)
+                        _, _, query = audio_model(this_english_audio_feat.to(rank))
+                        n_frames = NFrames(this_english_audio_feat, query, this_english_nframes) 
+                        scores = attention.module.one_to_many_score(m_images, query, n_frames).squeeze()
 
+                        # indices = torch.argsort(scores, descending=True)[0: counting[w]]
+                        # for ind in range(counting[w]):
+                        ind = torch.argmax(scores).item()
+                        if w in m_labels[ind]: 
+                            results[w]['correct'] += 1
+                        results[w]['total'] += 1
+            
+            
         c = 0
-        t = 0 
+        t = 0
         for w in results:
             correct = results[w]['correct']
             total = results[w]['total']
