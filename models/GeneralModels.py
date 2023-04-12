@@ -63,6 +63,17 @@ class ScoringAttentionModule(nn.Module):
         #     # x = torch.nn.functional.normalize(x)
         return x
 
+    def get_attention(self, image_embedding, audio_embeddings, audio_nframes):
+        image_embedding = self.normalise(image_embedding.transpose(1, 2))
+        audio_embeddings = self.normalise(audio_embeddings, audio_nframes)
+
+        aud_em = self.audio_encoder(audio_embeddings)
+
+        image_embedding = self.image_encoder(image_embedding)
+
+        att = torch.bmm(aud_em.transpose(1, 2), image_embedding)
+        return att
+
     def forward(self, image_embedding, audio_embeddings, audio_nframes):
         
         image_embedding = self.normalise(image_embedding.transpose(1, 2))

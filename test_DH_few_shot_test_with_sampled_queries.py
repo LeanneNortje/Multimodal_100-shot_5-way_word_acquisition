@@ -75,6 +75,32 @@ scipy_windows = {
     'bartlett': scipy.signal.bartlett
     }
 
+
+def load_concepts():
+    with open('./data/test_keywords.txt', 'r') as f:
+        return [keyword.strip() for keyword in f]
+
+
+def load_alignments(concepts):
+    alignments = {}
+    prev = ''
+    prev_wav = ''
+    prev_start = 0
+    with open(Path('./data/words.txt'), 'r') as f:
+        for line in f:
+            wav, start, stop, label = line.strip().split()
+            if label in concepts or (label == 'hydrant' and prev == 'fire' and wav == prev_wav):
+                if wav not in alignments: alignments[wav] = {}
+                if label == 'hydrant' and prev == 'fire':
+                    label = prev + " " + label
+                    start = prev_start
+                if label not in alignments[wav]: alignments[wav][label] = (int(float(start)*100), int(float(stop)*100))
+            prev = label
+            prev_wav = wav
+            prev_start = start
+    return alignments
+
+
 def myRandomCrop(im, resize, to_tensor):
 
         im = resize(im)
@@ -105,7 +131,7 @@ def LoadAudio(path, alignment, audio_conf):
     hop_length = int(sample_rate * window_stride)
 
     # load audio, subtract DC, preemphasis
-    y, sr = librosa.load(path, sample_rate)
+    y, sr = librosa.load(path, sr=sample_rate)
     dur = librosa.get_duration(y=y, sr=sr)
     nsamples = y.shape[0]
     if y.size == 0:
@@ -118,7 +144,7 @@ def LoadAudio(path, alignment, audio_conf):
         window=scipy_windows.get(window_type, scipy_windows['hamming']))
     spec = np.abs(stft)**2 # Power spectrum
     if audio_type == 'melspectrogram':
-        mel_basis = librosa.filters.mel(sr, n_fft, n_mels=num_mel_bins, fmin=fmin)
+        mel_basis = librosa.filters.mel(sr=sr, n_fft=n_fft, n_mels=num_mel_bins, fmin=fmin)
         melspec = np.dot(mel_basis, spec)
         logspec = librosa.power_to_db(melspec, ref=np.max)
     elif audio_type == 'spectrogram':
@@ -249,27 +275,8 @@ if __name__ == "__main__":
     args, image_base = modelSetup(command_line_args, True)
     rank = 'cuda'
      
-    concepts = []
-    with open('./data/test_keywords.txt', 'r') as f:
-        for keyword in f:
-            concepts.append(keyword.strip())
-
-    alignments = {}
-    prev = ''
-    prev_wav = ''
-    prev_start = 0
-    with open(Path('../Datasets/spokencoco/SpokenCOCO/words.txt'), 'r') as f:
-        for line in f:
-            wav, start, stop, label = line.strip().split()
-            if label in concepts or (label == 'hydrant' and prev == 'fire' and wav == prev_wav):
-                if wav not in alignments: alignments[wav] = {}
-                if label == 'hydrant' and prev == 'fire': 
-                    label = prev + " " + label
-                    start = prev_start
-                if label not in alignments[wav]: alignments[wav][label] = (int(float(start)*100), int(float(stop)*100))
-            prev = label
-            prev_wav = wav
-            prev_start = start
+    concepts = load_concepts()
+    alignments = load_alignments(concepts)
 
     audio_conf = args["audio_config"]
     target_length = audio_conf.get('target_length', 1024)
