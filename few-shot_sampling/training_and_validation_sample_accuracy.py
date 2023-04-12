@@ -36,55 +36,67 @@ with open(Path('../../Datasets/spokencoco/SpokenCOCO/words.txt'), 'r') as f:
     
 train_id_lookup = np.load(Path("../data/train_lookup.npz"), allow_pickle=True)['lookup'].item()
 train_neg_id_lookup = np.load(Path("../data/train_lookup.npz"), allow_pickle=True)['neg_lookup'].item()
-train_image_acc = 0
-train_image_total = 0
-train_audio_acc = 0
-train_audio_total = 0
 train_audio_per_keyword_acc = {}
+results = {}
 
 for id in train_id_lookup:
-    if key[id] not in train_audio_per_keyword_acc: train_audio_per_keyword_acc[key[id]] = {"acc": 0, "total": 0}
+
+    pred_word = key[id]
 
     for name in train_id_lookup[id]['audio']: 
         if name not in alignments: continue
-        for word in alignments[name]:
-            if key[id] == word: 
-                train_audio_acc += 1
-                train_audio_per_keyword_acc[key[id]]["acc"] += 1
-            train_audio_total += 1  
-            train_audio_per_keyword_acc[key[id]]["total"] += 1
+        if name not in results: results[name] = {'pred': [], 'gt': []}
+        results[name]['pred'].append(pred_word)
+        results[name]['gt'].extend(list(alignments[name].keys()))
 
+for i, name in enumerate(results):
+    
+    for p_w in results[name]['pred']: 
+        if p_w not in train_audio_per_keyword_acc: train_audio_per_keyword_acc[p_w] = {"tp": 0, "fn": 0, "fp": 0}
+        
+        if p_w in results[name]['gt']: train_audio_per_keyword_acc[p_w]['tp'] += 1
+        else: train_audio_per_keyword_acc[p_w]['fp'] += 1
+
+    for g_w in results[name]['gt']: 
+        if g_w not in results[name]['pred']: train_audio_per_keyword_acc[p_w]['fn'] += 1
+
+
+# for id in train_id_lookup:
+#     if key[id] not in train_audio_per_keyword_acc: train_audio_per_keyword_acc[key[id]] = {"tp": 0, "fn": 0, "fp": 0}
+
+#     pred_word = key[id]
+
+#     for name in train_id_lookup[id]['audio']: 
+#         if name not in alignments: continue
+        
+#         gt_words = list(alignments[name].keys())
+
+#         if pred_word in gt_words: train_audio_per_keyword_acc[key[id]]['tp'] += 1
+#         else: train_audio_per_keyword_acc[key[id]]['fp'] += 1
+
+    
+#         # for word in alignments[name]:
+#         #     if key[id] == word: 
+# #                 train_audio_acc += 1
+# #                 train_audio_per_keyword_acc[key[id]]["acc"] += 1
+# #             train_audio_total += 1  
+# #             train_audio_per_keyword_acc[key[id]]["total"] += 1
+
+t_tp = 0
+t_fp = 0
+t_fn = 0
 print(f'Training accuracies:')
 for word in train_audio_per_keyword_acc:
-    a = train_audio_per_keyword_acc[word]['acc']
-    t = train_audio_per_keyword_acc[word]['total']
-    print(f'{word}: {a}/{t} = {a/t} = {100*a/t:.2f}%')
-print(f'Overall: {train_audio_acc}/{train_audio_total} = {train_audio_acc/train_audio_total} = {100*train_audio_acc/train_audio_total:.2f}%')
-
-
-val_id_lookup = np.load(Path("../data/val_lookup.npz"), allow_pickle=True)['lookup'].item()
-val_neg_id_lookup = np.load(Path("../data/val_lookup.npz"), allow_pickle=True)['neg_lookup'].item()
-val_image_acc = 0
-val_image_total = 0
-val_audio_acc = 0
-val_audio_total = 0
-val_audio_per_keyword_acc = {}
-
-for id in val_id_lookup:
-    if key[id] not in val_audio_per_keyword_acc: val_audio_per_keyword_acc[key[id]] = {"acc": 0, "total": 0}
-
-    for name in val_id_lookup[id]['audio']: 
-        if name not in alignments: continue
-        for word in alignments[name]:
-            if key[id] == word: 
-                val_audio_acc += 1
-                val_audio_per_keyword_acc[key[id]]["acc"] += 1
-            val_audio_total += 1  
-            val_audio_per_keyword_acc[key[id]]["total"] += 1
-
-print(f'Validation accuracies:')
-for word in val_audio_per_keyword_acc:
-    a = val_audio_per_keyword_acc[word]['acc']
-    t = val_audio_per_keyword_acc[word]['total']
-    print(f'{word}: {a}/{t} = {a/t} = {100*a/t:.2f}%')
-print(f'Overall: {val_audio_acc}/{val_audio_total} = {val_audio_acc/val_audio_total} = {100*val_audio_acc/val_audio_total:.2f}%')
+    tp = train_audio_per_keyword_acc[word]['tp']
+    t_tp += tp
+    fp = train_audio_per_keyword_acc[word]['fp']
+    t_fp += fp
+    fn = train_audio_per_keyword_acc[word]['fn']
+    t_fn += fn
+    pres = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    print(f'{word:<10}\t Precision: {100*pres:.2f}%\t Recall: {100*recall:.2f}%')
+pres = t_tp / (t_tp + t_fp)
+recall = t_tp / (t_tp + t_fn)
+a = 'Overall'
+print(f'{a:<10}\t Precision: {100*pres:.2f}%\t Recall: {100*recall:.2f}%')
