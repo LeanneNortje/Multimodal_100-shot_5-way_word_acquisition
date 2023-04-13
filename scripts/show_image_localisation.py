@@ -12,9 +12,11 @@
 # - [x] load word alignments
 # - [x] write forward function
 # - [x] precompute image embeddings
-# - [ ] overlay attention on top of images
+# - [x] check that my scores match Leanne's
+# - [?] overlay attention on top of images
+# - [x] add caching in streamlit (see st.cache_data)
+# - [ ] run on GPU :-)
 # - [ ] ask Leanne: last or best checkpoint?
-# - [ ] check that my scores match Leanne's
 #
 
 import json
@@ -39,170 +41,40 @@ from torchdata.datapipes.map import SequenceWrapper
 from torchvision import transforms
 from torchvision.models import alexnet
 
-from pycocotools.coco import COCO
+from pytorch_grad_cam import GradCAM
+from pytorch_grad_cam.utils.image import show_cam_on_image
+from pytorch_grad_cam.utils.model_targets import RawScoresOutputTarget
 
-sys.path.insert(0, ".")
-from models.multimodalModels import mutlimodal as AudioModel
-from models.GeneralModels import ScoringAttentionModule
-
-from test_DH_few_shot_test_with_sampled_queries import (
-    load_concepts,
+from predict import (
+    AUDIO_COCO_DIR,
+    IMAGE_COCO_DIR,
+    MattNet,
     load_alignments,
-    LoadAudio as load_audio,
-    LoadImage as load_image,
-    PadFeat as pad_audio,
+    load_audio_1,
+    load_captions,
+    load_concepts,
+    load_image_1,
 )
+from evaluate import Results
 
 st.set_page_config(layout="wide")
 
 
-MODEL_DIR = Path(
-    "model_metadata/spokencoco_train/AudioModel-Transformer_ImageModel-Resnet50_ArgumentsHash-2560499dfc_ConfigFile-params"
-)
-
-
-BASE_DIR = Path("/mnt/private-share/speechDatabases")
-AUDIO_COCO_DIR = BASE_DIR / "spoken-coco"
-IMAGE_COCO_DIR = BASE_DIR / "coco"
-
-
-with open(MODEL_DIR / "args.pkl", "rb") as f:
-    ARGS = pickle.load(f)
-
-
-KWARGS_PAD_AUDIO = {
-    "target_length": ARGS["audio_config"].get("target_length", 1024),
-    "padval": ARGS["audio_config"].get("padval", 0),
-}
-
-IMG_SIZE = 256, 256
-KWARGS_LOAD_IMAGE = {
-    "resize": transforms.Resize(IMG_SIZE),
-    "to_tensor": transforms.ToTensor(),
-    "image_normalize": transforms.Normalize(
-        mean=ARGS["image_config"]["RGB_mean"],
-        std=ARGS["image_config"]["RGB_std"],
-    ),
-}
-
-
-def cache_np(path, func, *args, **kwargs):
-    if os.path.exists(path):
-        return np.load(path)
-    else:
-        result = func(*args, **kwargs)
-        np.save(path, result)
-        return result
-
-
-def load_captions():
-    with open(AUDIO_COCO_DIR / "SpokenCOCO_val.json", "r") as f:
-        return json.load(f)["data"]
-
-
-class MattNet(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-        audio_model = AudioModel(ARGS)
-        image_model = self.build_image_model(ARGS)
-        attention_model = ScoringAttentionModule(ARGS)
-
-        path_checkpoint = MODEL_DIR / "models" / "best_ckpt.pt"
-        state = torch.load(path_checkpoint)
-
-        audio_model.load_state_dict(self.fix_ddp_module(state["audio_model"]))
-        image_model.load_state_dict(self.fix_ddp_module(state["image_model"]))
-        attention_model.load_state_dict(self.fix_ddp_module(state["attention"]))
-
-        self.audio_model = audio_model
-        self.image_model = image_model
-        self.attention_model = attention_model
-
-    @staticmethod
-    def build_image_model(args):
-        seed_model = alexnet(pretrained=True)
-        image_model = nn.Sequential(*list(seed_model.features.children()))
-
-        last_layer_index = len(list(image_model.children()))
-        image_model.add_module(
-            str(last_layer_index),
-            nn.Conv2d(
-                256,
-                args["audio_model"]["embedding_dim"],
-                kernel_size=(3, 3),
-                stride=(1, 1),
-                padding=(1, 1),
-            ),
-        )
-        return image_model
-
-    @staticmethod
-    def fix_ddp_module(state):
-        # remove 'module.' of DistributedDataParallel (DDP)
-        def rm_prefix(key):
-            SEP = "."
-            prefix, *rest = key.split(SEP)
-            assert prefix == "module"
-            return SEP.join(rest)
-
-        return OrderedDict([(rm_prefix(k), v) for k, v in state.items()])
-
-    def forward(self, audio, image):
-        image_emb = self.image_model(image)
-        image_emb = image_emb.view(image_emb.size(0), image_emb.size(1), -1)
-        image_emb = image_emb.transpose(1, 2)
-        _, _, audio_emb = self.audio_model(audio)
-        att = self.attention_model.get_attention(image_emb, audio_emb, None)
-        score = att.max()
-        return score, att
-
-
-def load_image_1(image_file):
-    image_path = IMAGE_COCO_DIR / image_file
-    image_name = image_path.stem
-    image = load_image(image_path, **KWARGS_LOAD_IMAGE)
-    return image
-
-
-def compute_image_embeddings(network, image_files):
-    batch_size = 100
-
-    dp = SequenceWrapper(image_files)
-    dp = dp.map(load_image_1)
-    dp = dp.batch(batch_size=batch_size)
-
-    network.eval()
-
-    with torch.no_grad():
-        image_embeddings = (network(torch.stack(batch)) for batch in tqdm(dp))
-        image_embeddings = np.concatenate([e.numpy() for e in image_embeddings])
-
-    return image_embeddings
-
-
-def compute_scores(network, image_files, audio):
-    image_emb = cache_np(
-        "data/image_embeddings_matching_set.npy",
-        compute_image_embeddings,
-        network=mattnet.image_model,
-        image_files=image_matching_set,
+@st.cache_data
+def load_resources():
+    concepts = load_concepts()
+    return (
+        concepts,
+        load_alignments(concepts),
+        load_captions(),
+        Results(),
+        MattNet(),
     )
-    image_emb = torch.tensor(image_emb)
-    image_emb = image_emb.view(image_emb.size(0), image_emb.size(1), -1)
-    image_emb = image_emb.transpose(1, 2)
-    _, _, audio_emb = mattnet.audio_model(audio)
-
-    with torch.no_grad():
-        scores = mattnet.attention_model.one_to_many_score(image_emb, audio_emb, None)
-        scores = scores[0].numpy()
-
-    return scores
 
 
-concepts = load_concepts()
-alignments = load_alignments(concepts)
-captions_data = load_captions()
+concepts, alignments, captions_data, results, mattnet = load_resources()
+mattnet.eval()
+
 
 with st.sidebar:
     query_concept = st.selectbox("query concept", concepts)
@@ -210,67 +82,12 @@ with st.sidebar:
         "episode no.", min_value=0, max_value=1000, format="%d", step=1
     )
 
-episodes = np.load("data/test_episodes.npz", allow_pickle=True)["episodes"].item()
-audio_query, _ = episodes[episode_no]["queries"][query_concept]
-image_matching_set = list(sorted(episodes["matching_set"].keys()))
-
-coco = COCO(IMAGE_COCO_DIR / "annotations" / "instances_val2014.json")
-coco_category_ids = coco.getCatIds(catNms=[query_concept])
-
+audio_query, _ = results.episodes[episode_no]["queries"][query_concept]
 audio_path = AUDIO_COCO_DIR / audio_query
 audio_name = audio_path.stem
 
-audio, _ = load_audio(
-    audio_path, alignments[audio_name][query_concept], ARGS["audio_config"]
-)
-audio, _ = pad_audio(audio, **KWARGS_PAD_AUDIO)
-
-print("Load model...")
-mattnet = MattNet()
-mattnet.eval()
-
-
-def get_coco_annots(image_file):
-    image_name = Path(image_file).stem
-    coco_image_id = [int(image_name.split("_")[-1])]
-    coco_annot_ids = coco.getAnnIds(imgIds=coco_image_id, catIds=coco_category_ids)
-    coco_annots = coco.loadAnns(coco_annot_ids)
-    return coco_annots
-
-
-@st.cache_data
-def load_results(query_concept, episode_no):
-    scores = cache_np(
-        f"data/scores-{query_concept}-{episode_no}.npy",
-        compute_scores,
-        mattnet,
-        image_matching_set,
-        audio,
-    )
-
-    def is_query_in_caption(image_file):
-        return query_concept in episodes["matching_set"][image_file]
-
-    def is_query_in_image(image_file):
-        return len(get_coco_annots(image_file)) > 0
-
-    data = [
-        {
-            "score": scores[i],
-            "image-file": image_file,
-            "contains-query-based-on-caption": is_query_in_caption(image_file),
-            "contains-query-based-on-image": is_query_in_image(image_file),
-        }
-        for i, image_file in enumerate(image_matching_set)
-    ]
-
-    data = sorted(data, reverse=True, key=lambda datum: datum["score"])
-
-    for rank, datum in enumerate(data, start=1):
-        datum["rank"] = rank
-
-    return data
-
+get_alignments = lambda a: alignments[a][query_concept]
+audio = load_audio_1(audio_query, get_alignments)
 
 caption = first(
     [
@@ -288,14 +105,20 @@ st.markdown("caption:")
 st.code(caption)
 st.markdown("---")
 
-TOP_K = 64
-data = load_results(query_concept, episode_no)
-# data = [datum for datum in data if datum["contains-query-based-on-image"] and not datum["contains-query-based-on-caption"]]
-data = data[:TOP_K]
+data = results.load(query_concept, episode_no)
+data = sorted(data, reverse=True, key=lambda datum: datum["score"])
 
-from pytorch_grad_cam import GradCAM
-from pytorch_grad_cam.utils.image import show_cam_on_image
-from pytorch_grad_cam.utils.model_targets import RawScoresOutputTarget
+for rank, datum in enumerate(data, start=1):
+    datum["rank"] = rank
+
+TOP_K = 64
+# data = [
+#     datum
+#     for datum in data
+#     if datum["contains-query-based-on-image"]
+#     and not datum["contains-query-based-on-caption"]
+# ]
+data = data[:TOP_K]
 
 
 class MattNetForGradCAM(nn.Module):
@@ -346,9 +169,9 @@ for datum in data:
     image_explanation = show_cam_on_image(image_rgb, explanation, use_rgb=True)
 
     # annotations
-    coco_annots = get_coco_annots(image_file)
+    coco_annots = results.get_coco_annots(image_file, query_concept)
     if len(coco_annots) > 0:
-        masks = [coco.annToMask(a) for a in coco_annots]
+        masks = [results.coco.annToMask(a) for a in coco_annots]
         masks = np.stack(masks)
         image_annots = 255 * (masks.sum(axis=0) > 0)
     else:
@@ -385,8 +208,8 @@ for datum in data:
 {:s}
 """.format(
             score.item(),
-            "✓" if datum["contains-query-based-on-caption"] else "✗",
-            "✓" if datum["contains-query-based-on-image"] else "✗",
+            "✓" if datum["is-query-in-caption"] else "✗",
+            "✓" if datum["is-query-in-image"] else "✗",
             captions_for_image_str,
         )
     )
