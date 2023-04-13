@@ -53,6 +53,8 @@ from test_DH_few_shot_test_with_sampled_queries import (
     PadFeat as pad_audio,
 )
 
+st.set_page_config(layout="wide")
+
 
 MODEL_DIR = Path(
     "model_metadata/spokencoco_train/AudioModel-Transformer_ImageModel-Resnet50_ArgumentsHash-2560499dfc_ConfigFile-params"
@@ -228,6 +230,14 @@ mattnet = MattNet()
 mattnet.eval()
 
 
+def get_coco_annots(image_file):
+    image_name = Path(image_file).stem
+    coco_image_id = [int(image_name.split("_")[-1])]
+    coco_annot_ids = coco.getAnnIds(imgIds=coco_image_id, catIds=coco_category_ids)
+    coco_annots = coco.loadAnns(coco_annot_ids)
+    return coco_annots
+
+
 @st.cache_data
 def load_results(query_concept, episode_no):
     scores = cache_np(
@@ -238,22 +248,18 @@ def load_results(query_concept, episode_no):
         audio,
     )
 
-    def contains_query_based_on_caption(image_file):
+    def is_query_in_caption(image_file):
         return query_concept in episodes["matching_set"][image_file]
 
-    def contains_query_based_on_image(image_file):
-        image_name = Path(image_file).stem
-        coco_image_id = [int(image_name.split("_")[-1])]
-        coco_annot_ids = coco.getAnnIds(imgIds=coco_image_id, catIds=coco_category_ids)
-        coco_annots = coco.loadAnns(coco_annot_ids)
-        return len(coco_annots) > 0
+    def is_query_in_image(image_file):
+        return len(get_coco_annots(image_file)) > 0
 
     data = [
         {
             "score": scores[i],
             "image-file": image_file,
-            "contains-query-based-on-caption": contains_query_based_on_caption(image_file),
-            "contains-query-based-on-image": contains_query_based_on_image(image_file),
+            "contains-query-based-on-caption": is_query_in_caption(image_file),
+            "contains-query-based-on-image": is_query_in_image(image_file),
         }
         for i, image_file in enumerate(image_matching_set)
     ]
@@ -284,11 +290,33 @@ st.markdown("---")
 
 TOP_K = 64
 data = load_results(query_concept, episode_no)
-data = [datum for datum in data if datum["contains-query-based-on-image"] and not datum["contains-query-based-on-caption"]]
+# data = [datum for datum in data if datum["contains-query-based-on-image"] and not datum["contains-query-based-on-caption"]]
 data = data[:TOP_K]
 
-for datum in data:
+from pytorch_grad_cam import GradCAM
+from pytorch_grad_cam.utils.image import show_cam_on_image
+from pytorch_grad_cam.utils.model_targets import RawScoresOutputTarget
 
+
+class MattNetForGradCAM(nn.Module):
+    def __init__(self, mattnet, audio):
+        super().__init__()
+        self.mattnet = mattnet
+        self.audio = audio
+
+    def forward(self, image):
+        score, _ = self.mattnet(self.audio, image)
+        return [score]
+
+
+mattnet_for_gradcam = MattNetForGradCAM(mattnet, audio)
+grad_cam = GradCAM(
+    model=mattnet_for_gradcam,
+    target_layers=[mattnet_for_gradcam.mattnet.image_model[-1]],
+)
+targets = [RawScoresOutputTarget()]
+
+for datum in data:
     image_file = datum["image-file"]
     image_path = IMAGE_COCO_DIR / image_file
     image_name = image_path.stem
@@ -299,24 +327,46 @@ for datum in data:
     with torch.no_grad():
         score, attention = mattnet(audio, image)
 
-    # input_image = Image.open(image_path)
-    # input_image = input_image.resize(IMG_SIZE)
-    # input_image = np.array(input_image)
+    # original image
+    image_rgb = Image.open(image_path)
+    # image_rgb = image_rgb.resize(IMG_SIZE)
+    image_rgb = np.array(image_rgb) / 255
 
-    attention_image = torch.sigmoid(attention).view(7, 7).numpy()
-    attention_image = Image.fromarray(attention_image)
-    attention_image = attention_image.resize(IMG_SIZE, Image.Resampling.BICUBIC)
-    attention_image = np.clip(np.array(attention_image), 0, 1)
+    # prepare attention map for visualization
+    # attention_image = torch.sigmoid(attention).view(8, 7).numpy()
+    # attention_image = Image.fromarray(attention_image)
+    # attention_image = attention_image.resize(IMG_SIZE, Image.Resampling.BICUBIC)
+    # attention_image = np.clip(np.array(attention_image), 0, 1)
+
+    # explanations
+    h, w, _ = image_rgb.shape
+    explanation = grad_cam(input_tensor=image, targets=targets)[0]
+    explanation = Image.fromarray(explanation).resize((w, h))
+    explanation = np.array(explanation)
+    image_explanation = show_cam_on_image(image_rgb, explanation, use_rgb=True)
+
+    # annotations
+    coco_annots = get_coco_annots(image_file)
+    if len(coco_annots) > 0:
+        masks = [coco.annToMask(a) for a in coco_annots]
+        masks = np.stack(masks)
+        image_annots = 255 * (masks.sum(axis=0) > 0)
+    else:
+        image_annots = np.zeros(image_rgb.shape)
 
     st.markdown("rank: {}".format(datum["rank"]))
     st.markdown("image name: `{}`".format(image_name))
-    cols = st.columns(2)
+
+    cols = st.columns(3)
 
     cols[0].markdown("image")
     cols[0].image(str(image_path))
 
-    cols[1].markdown("attention")
-    cols[1].image(attention_image)
+    cols[1].markdown("explanation")
+    cols[1].image(image_explanation)
+
+    cols[2].markdown("annotations")
+    cols[2].image(image_annots)
 
     captions_for_image = [
         caption["text"]
@@ -326,13 +376,9 @@ for datum in data:
     ]
     captions_for_image_str = "\n".join(f"  - `{c}`" for c in captions_for_image)
 
-    # visualize annotations
-    # for ann in coco_annots:
-    #     st.image(255 * coco.annToMask(ann))
-
     st.markdown(
         """
-- score (maximum of attetion): {:.3f}
+- score (maximum of attention): {:.3f}
 - contains query based on caption: {:s}
 - contains query based on image: {:s}
 - captions:
