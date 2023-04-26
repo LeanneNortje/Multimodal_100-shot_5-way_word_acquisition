@@ -50,29 +50,32 @@ from predict import (
     IMAGE_COCO_DIR,
     MattNet,
     load_alignments,
-    load_audio_1,
     load_captions,
     load_concepts,
-    load_image_1,
 )
 from evaluate import Results
 
 st.set_page_config(layout="wide")
 
 
+TO_SAVE_DATA_FOR_PAPER = False
+
+config_name = os.environ.get("CONFIG", "100")
+
+
 @st.cache_data
-def load_resources():
+def load_resources(config_name):
     concepts = load_concepts()
     return (
         concepts,
         load_alignments(concepts),
         load_captions(),
-        Results(),
-        MattNet(),
+        Results(config_name),
+        MattNet(config_name),
     )
 
 
-concepts, alignments, captions_data, results, mattnet = load_resources()
+concepts, alignments, captions_data, results, mattnet = load_resources(config_name)
 mattnet.eval()
 
 
@@ -81,13 +84,41 @@ with st.sidebar:
     episode_no = st.number_input(
         "episode no.", min_value=0, max_value=1000, format="%d", step=1
     )
+    vis_type = st.selectbox("explanation", ["grad-cam", "attention"])
 
 audio_query, _ = results.episodes[episode_no]["queries"][query_concept]
 audio_path = AUDIO_COCO_DIR / audio_query
 audio_name = audio_path.stem
 
 get_alignments = lambda a: alignments[a][query_concept]
-audio = load_audio_1(audio_query, get_alignments)
+audio = mattnet.load_audio_1(audio_query, get_alignments)
+
+if TO_SAVE_DATA_FOR_PAPER:
+    import librosa
+    import seaborn as sns
+
+    from matplotlib import pyplot as plt
+    from predict import ARGS
+
+    audio_config = ARGS["audio_config"]
+    y, sr = librosa.load(audio_path, sr=audio_config["sample_rate"])
+
+    k = audio_config["window_stride"] * audio_config["sample_rate"]
+    α, ω = get_alignments(audio_name)
+    α = int(k * α)
+    ω = int(k * ω)
+    y = y[α:ω]
+
+    fig, ax = plt.subplots()
+    ax.plot(y)
+    ax.axis("off")
+
+    st.code(audio_path)
+    st.audio(y, sample_rate=sr)
+    st.pyplot(fig)
+
+    concept_str = query_concept.replace(" ", "-")
+    fig.savefig(f"output/taslp/imgs/{config_name}/audio-{concept_str}.png")
 
 caption = first(
     [
@@ -111,7 +142,7 @@ data = sorted(data, reverse=True, key=lambda datum: datum["score"])
 for rank, datum in enumerate(data, start=1):
     datum["rank"] = rank
 
-TOP_K = 64
+TOP_K = 32
 # data = [
 #     datum
 #     for datum in data
@@ -144,7 +175,7 @@ for datum in data:
     image_path = IMAGE_COCO_DIR / image_file
     image_name = image_path.stem
 
-    image = load_image_1(image_file)
+    image = mattnet.load_image_1(image_file)
     image = image.unsqueeze(0)
 
     with torch.no_grad():
@@ -152,21 +183,32 @@ for datum in data:
 
     # original image
     image_rgb = Image.open(image_path)
+    image_rgb = image_rgb.convert("RGB")
+
     # image_rgb = image_rgb.resize(IMG_SIZE)
     image_rgb = np.array(image_rgb) / 255
+    h, w, _ = image_rgb.shape
 
     # prepare attention map for visualization
-    # attention_image = torch.sigmoid(attention).view(8, 7).numpy()
-    # attention_image = Image.fromarray(attention_image)
-    # attention_image = attention_image.resize(IMG_SIZE, Image.Resampling.BICUBIC)
-    # attention_image = np.clip(np.array(attention_image), 0, 1)
+    if vis_type == "attention":
+        attention = attention.view(7, 7)
+        attention = 5 * (attention / 100 - 0.5)
+        explanation = torch.sigmoid(attention).numpy()
+    elif vis_type == "grad-cam":
+        explanation = grad_cam(input_tensor=image, targets=targets)[0]
+    else:
+        assert False
 
-    # explanations
-    h, w, _ = image_rgb.shape
-    explanation = grad_cam(input_tensor=image, targets=targets)[0]
     explanation = Image.fromarray(explanation).resize((w, h))
     explanation = np.array(explanation)
     image_explanation = show_cam_on_image(image_rgb, explanation, use_rgb=True)
+
+    if TO_SAVE_DATA_FOR_PAPER:
+        import shutil
+
+        shutil.copy(image_path, f"output/taslp/imgs/{config_name}/{image_name}.jpg")
+        image_explanation_out = Image.fromarray(image_explanation)
+        image_explanation_out.save(f"output/taslp/imgs/{config_name}/{image_name}-explanation-{vis_type}.jpg")
 
     # annotations
     coco_annots = results.get_coco_annots(image_file, query_concept)
@@ -185,7 +227,7 @@ for datum in data:
     cols[0].markdown("image")
     cols[0].image(str(image_path))
 
-    cols[1].markdown("explanation")
+    cols[1].markdown("explanation: " + vis_type)
     cols[1].image(image_explanation)
 
     cols[2].markdown("annotations")

@@ -7,6 +7,7 @@ import sys
 from collections import OrderedDict
 from pathlib import Path
 
+import click
 import numpy as np
 import torch
 
@@ -30,29 +31,24 @@ from test_DH_few_shot_test_with_sampled_queries import (
 )
 
 
-MODEL_DIR = Path("model_metadata/spokencoco_train/AudioModel-Transformer_ImageModel-Resnet50_ArgumentsHash-2560499dfc_ConfigFile-params")
 BASE_DIR = Path("/mnt/private-share/speechDatabases")
 AUDIO_COCO_DIR = BASE_DIR / "spoken-coco"
 IMAGE_COCO_DIR = BASE_DIR / "coco"
 
 
-with open(MODEL_DIR / "args.pkl", "rb") as f:
-    ARGS = pickle.load(f)
-
-
-KWARGS_PAD_AUDIO = {
-    "target_length": ARGS["audio_config"].get("target_length", 1024),
-    "padval": ARGS["audio_config"].get("padval", 0),
-}
-
-IMG_SIZE = 256, 256
-KWARGS_LOAD_IMAGE = {
-    "resize": transforms.Resize(IMG_SIZE),
-    "to_tensor": transforms.ToTensor(),
-    "image_normalize": transforms.Normalize(
-        mean=ARGS["image_config"]["RGB_mean"],
-        std=ARGS["image_config"]["RGB_std"],
-    ),
+CONFIGS = {
+    "5": {
+        "num-shots": 5,
+        "num-image-layers": 2,
+    },
+    "100": {
+        "num-shots": 100,
+        "num-image-layers": 2,
+    },
+    "100-loc": {
+        "num-shots": 100,
+        "num-image-layers": 0,
+    },
 }
 
 
@@ -71,14 +67,42 @@ def load_captions():
 
 
 class MattNet(nn.Module):
-    def __init__(self, device="cpu"):
+    def __init__(self, config_name, device="cpu"):
         super().__init__()
 
-        audio_model = AudioModel(ARGS)
-        image_model = self.build_image_model(ARGS)
-        attention_model = ScoringAttentionModule(ARGS)
+        config = CONFIGS[config_name]
 
-        path_checkpoint = MODEL_DIR / "models" / "best_ckpt.pt"
+        num_shots = config["num-shots"]
+        num_image_layers = config["num-image-layers"]
+
+        self.num_shots = num_shots
+        self.model_dir = Path(f"model_metadata/spokencoco_train/model-{config_name}")
+
+        with open(self.model_dir / "args.pkl", "rb") as f:
+            self.args = pickle.load(f)
+
+        self.kwargs_pad_audio = {
+            "target_length": self.args["audio_config"].get("target_length", 1024),
+            "padval": self.args["audio_config"].get("padval", 0),
+        }
+
+        self.img_size = 256, 256
+        self.kwargs_load_image = {
+            "resize": transforms.Resize(self.img_size),
+            "to_tensor": transforms.ToTensor(),
+            "image_normalize": transforms.Normalize(
+                mean=self.args["image_config"]["RGB_mean"],
+                std=self.args["image_config"]["RGB_std"],
+            ),
+        }
+
+        self.args["num_image_layers"] = num_image_layers
+
+        audio_model = AudioModel(self.args)
+        image_model = self.build_image_model(self.args)
+        attention_model = ScoringAttentionModule(self.args)
+
+        path_checkpoint = self.model_dir / "models" / "best_ckpt.pt"
         state = torch.load(path_checkpoint, map_location=device)
 
         audio_model.load_state_dict(self.fix_ddp_module(state["audio_model"]))
@@ -128,44 +152,44 @@ class MattNet(nn.Module):
         return score, att
 
 
-def load_image_1(image_file):
-    image_path = IMAGE_COCO_DIR / image_file
-    image = load_image(image_path, **KWARGS_LOAD_IMAGE)
-    return image
+    def load_image_1(self, image_file):
+        image_path = IMAGE_COCO_DIR / image_file
+        image = load_image(image_path, **self.kwargs_load_image)
+        return image
 
 
-def load_audio_1(audio_file, get_alignment):
-    audio_path = AUDIO_COCO_DIR / audio_file
-    audio_name = audio_path.stem
+    def load_audio_1(self, audio_file, get_alignment):
+        audio_path = AUDIO_COCO_DIR / audio_file
+        audio_name = audio_path.stem
 
-    alignment = get_alignment(audio_name)
+        alignment = get_alignment(audio_name)
 
-    audio, _ = load_audio(audio_path, alignment, ARGS["audio_config"])
-    audio, _ = pad_audio(audio, **KWARGS_PAD_AUDIO)
-    return audio
+        audio, _ = load_audio(audio_path, alignment, self.args["audio_config"])
+        audio, _ = pad_audio(audio, **self.kwargs_pad_audio)
+        return audio
 
 
-def compute_image_embeddings(network, image_files):
+def compute_image_embeddings(mattnet, image_files):
     batch_size = 100
 
     dp = SequenceWrapper(image_files)
-    dp = dp.map(load_image_1)
+    dp = dp.map(mattnet.load_image_1)
     dp = dp.batch(batch_size=batch_size)
 
-    network.eval()
+    mattnet.eval()
 
     with torch.no_grad():
-        image_embeddings = (network(torch.stack(batch)) for batch in tqdm(dp))
+        image_embeddings = (mattnet.image_model(torch.stack(batch)) for batch in tqdm(dp))
         image_embeddings = np.concatenate([e.numpy() for e in image_embeddings])
 
     return image_embeddings
 
 
-def compute_scores(mattnet, image_files, audio):
+def compute_scores(mattnet, image_files, audio, config_name):
     image_emb = cache_np(
-        "data/image_embeddings_matching_set.npy",
+        f"data/image_embeddings_matching_set_{config_name}.npy",
         compute_image_embeddings,
-        network=mattnet.image_model,
+        mattnet=mattnet,
         image_files=image_files,
     )
     image_emb = torch.tensor(image_emb)
@@ -180,9 +204,11 @@ def compute_scores(mattnet, image_files, audio):
     return scores
 
 
-def main():
+@click.command()
+@click.option("-c", "--config", "config_name", required=True)
+def main(config_name):
 
-    mattnet = MattNet()
+    mattnet = MattNet(config_name)
     mattnet.eval()
 
     concepts = load_concepts()
@@ -197,14 +223,15 @@ def main():
     def compute1(episode, concept):
         get_alignment = lambda a: alignments[a][concept]
         audio_file, _ = episodes[episode]["queries"][concept]
-        audio = load_audio_1(audio_file, get_alignment)
+        audio = mattnet.load_audio_1(audio_file, get_alignment)
         concept_str = concept.replace(" ", "-")
         return cache_np(
-            f"data/scores/{concept_str}-{episode}.npy",
+            f"data/scores-{config_name}/{concept_str}-{episode}.npy",
             compute_scores,
             mattnet,
             image_matching_set,
             audio,
+            config_name,
         )
 
     for episode in range(num_episodes):

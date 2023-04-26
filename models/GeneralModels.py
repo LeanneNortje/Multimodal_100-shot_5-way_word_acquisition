@@ -24,14 +24,15 @@ class ScoringAttentionModule(nn.Module):
             nn.Linear(128, 1)
         )
         # self.image_encoder = nn.LSTM(49, 44, batch_first=True)
-        self.image_encoder = nn.Sequential(
-            # nn.LayerNorm(49),
-            nn.Linear(49, 49),
-            # nn.ReLU(),
-            # nn.LayerNorm(49),
-            nn.Linear(49, 49),
-            # nn.ReLU()
-        )
+        num_image_layers = args.get("num_image_layers", 2)
+        image_layers = [nn.Linear(49, 49) for _ in range(num_image_layers)]
+        self.image_encoder = nn.Sequential(*image_layers)
+        # nn.LayerNorm(49),
+        # nn.Linear(49, 49),
+        # nn.ReLU(),
+        # nn.LayerNorm(49),
+        # nn.Linear(49, 49),
+        # nn.ReLU()
         # self.similarity = nn.Sequential(
         #     # nn.LayerNorm(49),
         #     nn.Linear(49, 49),
