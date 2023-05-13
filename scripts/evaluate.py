@@ -34,7 +34,7 @@ class Results:
         coco_annots = self.coco.loadAnns(coco_annot_ids)
         return coco_annots
 
-    def load(self, concept, episode):
+    def load_retrieval(self, concept, episode):
         concept_str = concept.replace(" ", "-")
         path = f"data/scores-{self.config_name}/{concept_str}-{episode}.npy"
         scores = np.load(path)
@@ -54,6 +54,31 @@ class Results:
             }
             for i, image_file in enumerate(self.image_matching_set)
         ]
+
+    def load_classification(self, concept, episode):
+        concept_str = concept.replace(" ", "-")
+        path = f"data/scores-{self.config_name}/{concept_str}-{episode}.npy"
+        scores = np.load(path)
+        matching_set = self.episodes[episode]["matching_set"]
+
+        def is_query_in_caption(image_file):
+            return concept in self.episodes["matching_set"][image_file]
+
+        def is_query_in_image(image_file):
+            return len(self.get_coco_annots(image_file, concept)) > 0
+
+        return [
+            {
+                "score": scores[self.image_matching_set.index(image_file)],
+                "image-file": image_file,
+                "image-concept": category,
+                "is-query-in-caption": is_query_in_caption(image_file),
+                "is-query-in-image": is_query_in_image(image_file),
+            }
+            for category, image_file in matching_set.items()
+        ]
+
+    load = load_retrieval
 
 
 def evaluate_classification(
@@ -102,14 +127,14 @@ def main(config_name):
     concepts = load_concepts()
     results = Results(config_name)
 
-    # counts = [
-    #     # evaluate_classification(concepts, results, episode=random.randint(0, 999))
-    #     evaluate_classification(concepts, results, episode=episode)
-    #     for episode in tqdm(range(NUM_EPISODES))
-    # ]
-    # counts = reduce(lambda x, y: x.add(y), counts)
+    counts = [
+        # evaluate_classification(concepts, results, episode=random.randint(0, 999))
+        evaluate_classification(concepts, results, episode=episode)
+        for episode in tqdm(range(NUM_EPISODES))
+    ]
+    counts = reduce(lambda x, y: x.add(y), counts)
     # print("accuracy")
-    # print(100 * counts["num_match"] / counts["num_total"])
+    print(100 * counts["num_match"] / counts["num_total"])
     # print("accuracy: {:.2f}±{:.1f}".format(np.mean(accs), np.std(accs)))
 
     metrics = [
