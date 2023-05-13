@@ -13,16 +13,68 @@ from pycocotools.coco import COCO
 
 # from sklearn.metrics import top_k_accuracy_score
 
-from predict import IMAGE_COCO_DIR, load_concepts
+from predict import CONFIGS, COCOData
 
 
 class Results:
-    def __init__(self, config_name):
+    def __init__(self, config_name, dataset):
+        LOADERS = {
+            "retrieval": self.load_retrieval,
+            "classification": self.load_classification,
+        }
+        config = CONFIGS[config_name]
+        task = config["task"]
+
+        self.dataset = dataset
         self.config_name = config_name
-        self.coco = COCO(IMAGE_COCO_DIR / "annotations" / "instances_val2014.json")
-        self.episodes = np.load("data/test_episodes.npz", allow_pickle=True)
-        self.episodes = self.episodes["episodes"].item()
-        self.image_matching_set = sorted(self.episodes["matching_set"].keys())
+        self.load = LOADERS[task]
+
+    def is_query_in_caption(self, concept, image_file):
+        raise NotImplementedError
+
+    def is_query_in_image(self, concept, image_file):
+        raise NotImplementedError
+
+    def load_retrieval(self, concept, episode):
+        concept_str = concept.replace(" ", "-")
+        path = f"data/scores-{self.config_name}/{concept_str}-{episode}.npy"
+        scores = np.load(path)
+
+        return [
+            {
+                "score": scores[i],
+                "image-file": image_file,
+                "is-query-in-caption": self.is_query_in_caption(concept, image_file),
+                "is-query-in-image": self.is_query_in_image(concept, image_file),
+            }
+            for i, image_file in enumerate(self.dataset.image_matching_set)
+        ]
+
+    def load_classification(self, concept, episode):
+        concept_str = concept.replace(" ", "-")
+        path = f"data/scores-{self.config_name}/{concept_str}-{episode}.npy"
+        scores = np.load(path)
+
+        episode_matching_set = self.dataset.episodes[episode]["matching_set"]
+        episode_matching_set_images = list(episode_matching_set.values())
+
+        return [
+            {
+                "score": scores[episode_matching_set_images.index(image_file)],
+                "image-file": image_file,
+                "image-concept": category,
+                "is-query-in-caption": self.is_query_in_caption(concept, image_file),
+                "is-query-in-image": self.is_query_in_image(concept, image_file),
+            }
+            for category, image_file in episode_matching_set.items()
+        ]
+
+
+class COCOResults(Results):
+    def __init__(self, config_name, dataset):
+        super().__init__(config_name, dataset)
+        self.coco = COCO(dataset.image_dir / "annotations" / "instances_val2014.json")
+        # self.load = self.load_retrieval
 
     def get_coco_annots(self, image_file, concept):
         image_name = Path(image_file).stem
@@ -34,51 +86,24 @@ class Results:
         coco_annots = self.coco.loadAnns(coco_annot_ids)
         return coco_annots
 
-    def load_retrieval(self, concept, episode):
-        concept_str = concept.replace(" ", "-")
-        path = f"data/scores-{self.config_name}/{concept_str}-{episode}.npy"
-        scores = np.load(path)
+    def is_query_in_image(self, concept, image_file):
+        return len(self.get_coco_annots(image_file, concept)) > 0
 
-        def is_query_in_caption(image_file):
-            return concept in self.episodes["matching_set"][image_file]
+    def is_query_in_caption(self, concept, image_file):
+        return concept in self.dataset.load_caption(image_file)
 
-        def is_query_in_image(image_file):
-            return len(self.get_coco_annots(image_file, concept)) > 0
 
-        return [
-            {
-                "score": scores[i],
-                "image-file": image_file,
-                "is-query-in-caption": is_query_in_caption(image_file),
-                "is-query-in-image": is_query_in_image(image_file),
-            }
-            for i, image_file in enumerate(self.image_matching_set)
-        ]
+class FlickrResults(Results):
+    def __init__(self, config_name, dataset):
+        super().__init__(config_name, dataset)
 
-    def load_classification(self, concept, episode):
-        concept_str = concept.replace(" ", "-")
-        path = f"data/scores-{self.config_name}/{concept_str}-{episode}.npy"
-        scores = np.load(path)
-        matching_set = self.episodes[episode]["matching_set"]
+    def is_query_in_image(self, concept, image_file):
+        return None
 
-        def is_query_in_caption(image_file):
-            return concept in self.episodes["matching_set"][image_file]
-
-        def is_query_in_image(image_file):
-            return len(self.get_coco_annots(image_file, concept)) > 0
-
-        return [
-            {
-                "score": scores[self.image_matching_set.index(image_file)],
-                "image-file": image_file,
-                "image-concept": category,
-                "is-query-in-caption": is_query_in_caption(image_file),
-                "is-query-in-image": is_query_in_image(image_file),
-            }
-            for category, image_file in matching_set.items()
-        ]
-
-    load = load_retrieval
+    def is_query_in_caption(self, concept, image_file):
+        captions = [self.dataset.captions[image_file + "_" + str(num)] for num in range(5)]
+        words = " ".join(captions).lower().split()
+        return any(concept == word for word in words)
 
 
 def evaluate_classification(
@@ -89,12 +114,15 @@ def evaluate_classification(
     data = [
         {**r, "concept": concept}
         for concept in concepts
-        for r in results.load(concept, episode)
+        for r in results.load_classification(concept, episode)
     ]
     df = pd.DataFrame(data)
 
-    true = df[df[label_type]][["image-file", "concept"]].set_index("image-file")
-    pred = df.pivot("image-file", "concept", "score").idxmax(1)
+    try:
+        true = df[df[label_type]][["image-file", "concept"]].set_index("image-file")
+        pred = df.pivot("image-file", "concept", "score").idxmax(1)
+    except:
+        return None
 
     true_pred = true.join(pred.to_frame("pred"))
     # num_match = (true_pred["concept"] == true_pred["pred"]).sum()
@@ -119,40 +147,60 @@ def evaluate_retrieval(results, label_type):
     return 100 * sum(true[idxs]) / n
 
 
-@click.command()
-@click.option("-c", "--config", "config_name", required=True)
-def main(config_name):
-    NUM_EPISODES = 10
+EVALUATORS = {
+    "retrieval": evaluate_retrieval,
+    "classification": evaluate_classification,
+}
 
-    concepts = load_concepts()
-    results = Results(config_name)
+
+@click.command()
+@click.option(
+    "-c", "--config", "config_name", required=True, type=click.Choice(CONFIGS)
+)
+def main(config_name):
+    NUM_EPISODES = 1000
+
+    config = CONFIGS[config_name]
+    dataset = config["data-class"]()
+    task = config["task"]
+
+    if config["data-class"] == COCOData:
+        Results = COCOResults
+    else:
+        Results = FlickrResults
+
+    concepts = dataset.load_concepts()
+    results = Results(config_name, dataset)
+    evaluate = EVALUATORS[task]
 
     counts = [
-        # evaluate_classification(concepts, results, episode=random.randint(0, 999))
-        evaluate_classification(concepts, results, episode=episode)
+        # evaluate(concepts, results, episode=random.randint(0, 999))
+        evaluate(concepts, results, episode=episode)
         for episode in tqdm(range(NUM_EPISODES))
     ]
+    counts = [c for c in counts if c is not None]
+    print(len(counts))
     counts = reduce(lambda x, y: x.add(y), counts)
     # print("accuracy")
     print(100 * counts["num_match"] / counts["num_total"])
     # print("accuracy: {:.2f}±{:.1f}".format(np.mean(accs), np.std(accs)))
 
-    metrics = [
-        {
-            "concept": concept,
-            "episode": episode,
-            "metric": evaluate_retrieval(
-                results.load(concept, episode),
-                label_type="is-query-in-caption",
-            ),
-        }
-        for concept in concepts
-        for episode in range(NUM_EPISODES)
-    ]
-    df = pd.DataFrame(metrics)
-    print(df.groupby("concept").mean())
-    print(df["metric"].mean())
-    pdb.set_trace()
+    # metrics = [
+    #     {
+    #         "concept": concept,
+    #         "episode": episode,
+    #         "metric": evaluate_retrieval(
+    #             results.load(concept, episode),
+    #             label_type="is-query-in-caption",
+    #         ),
+    #     }
+    #     for concept in concepts
+    #     for episode in range(NUM_EPISODES)
+    # ]
+    # df = pd.DataFrame(metrics)
+    # print(df.groupby("concept").mean())
+    # print(df["metric"].mean())
+    # pdb.set_trace()
 
 
 if __name__ == "__main__":

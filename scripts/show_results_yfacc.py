@@ -15,6 +15,7 @@ import streamlit as st
 import textgrid
 
 # st.set_page_config(layout="wide")
+from utils import load
 
 
 BASE_DIR = Path("/home/doneata/data")
@@ -30,11 +31,6 @@ def load_vocab():
         return word_en, " ".join(words_yo)
 
     return load(path, parse)
-
-
-def load(path, parser):
-    with open(path, "r") as f:
-        return list(map(parser, f.readlines()))
 
 
 class Sample:
@@ -72,6 +68,7 @@ class Sample:
 
 class FlickrSamples:
     def __init__(self, split):
+        # TODO Rewrite using FlickrData and YFACCData
         assert split in "train dev test".split()
         self.split = split
 
@@ -128,9 +125,10 @@ class FlickrSamples:
         path = BASE_DIR_YO / "Flickr8k_text" / f"Flickr8k.token.{split}_yoruba.txt"
         return dict(load(path, self.parse_token))
 
-    def load_alignments_en(self):
+    @staticmethod
+    def load_alignments_en():
         path = "/home/doneata/work/herman-semantic-flickr/data/flickr_8k.ctm"
-        alignments_list = load(path, self.parse_ctm)
+        alignments_list = load(path, FlickrSamples.parse_ctm)
         alignments_dict = {
             key: [dissoc(d, "key") for d in group]
             for key, group in groupby(alignments_list, key=lambda x: x["key"])
