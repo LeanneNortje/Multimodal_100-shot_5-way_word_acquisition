@@ -99,7 +99,7 @@ class COCOData(Dataset):
         return self.alignments[audio_name][concept]
 
 
-class FlickrData(Dataset):
+class FlickrEnData(Dataset):
     def __init__(self):
         self.base_dir = Path("/home/doneata/data")
         self.audio_dir = self.base_dir / "flickr8k-audio" / "wavs"
@@ -128,7 +128,7 @@ class FlickrData(Dataset):
     @staticmethod
     def parse_ctm(line):
         key, _, time_start, duration, word = line.split()
-        key = FlickrData.reformat_key(key)
+        key = FlickrEnData.reformat_key(key)
         time_start = int(100 * float(time_start))
         duration = int(100 * float(duration))
         return {
@@ -141,14 +141,14 @@ class FlickrData(Dataset):
     @staticmethod
     def parse_token(line):
         key, *words = line.split()
-        key = FlickrData.reformat_key(key)
+        key = FlickrEnData.reformat_key(key)
         text = " ".join(words)
         return (key, text)
 
     @staticmethod
     def load_alignments():
         path = "/home/doneata/work/herman-semantic-flickr/data/flickr_8k.ctm"
-        alignments_list = load(path, FlickrData.parse_ctm)
+        alignments_list = load(path, FlickrEnData.parse_ctm)
         alignments_dict = {
             key: [dissoc(d, "key") for d in group]
             for key, group in groupby(alignments_list, key=lambda x: x["key"])
@@ -186,8 +186,94 @@ class FlickrData(Dataset):
         raise ValueError
 
 
-class YFACCData(Dataset):
-    pass
+class FlickrYoData(Dataset):
+    def __init__(self):
+        self.base_dir = Path("/home/doneata/data")
+        self.audio_dir = self.base_dir / "flickr8k-yoruba" / "Flickr8k_Yoruba_v6"
+        self.image_dir = self.base_dir / "flickr8k-images" / "Flicker8k_Dataset"
+
+        self.base_metadata_dir = Path("/home/doneata/work/mattnet-yfacc")
+        self.path_episodes = (
+            self.base_metadata_dir
+            / "low-resource_support_sets"
+            / "data"
+            / "test_episodes.npz"
+        )
+
+        path = (
+            self.base_dir
+            / "flickr8k-yoruba"
+            / "Flickr8k_Yoruba_v6"
+            / "Flickr8k_text"
+            / "eng_yoruba_keywords.txt"
+        )
+        self.concept_to_yoruba = dict(load(path, lambda line: line.strip().split(", ")))
+
+    @staticmethod
+    def parse_token(line):
+        key, *words = line.split()
+        key = FlickrEnData.reformat_key(key)
+        text = " ".join(words)
+        return (key, text)
+
+    @cached_property
+    def alignments(self):
+        return self.load_alignments()
+
+    @staticmethod
+    def reformat_key(key):
+        # from `271637337_0700f307cf.jpg#2` to `271637337_0700f307cf_2`
+        # TODO: probably could use a tuple or namedtuple to hold a key
+        key, num = key.split("#")
+        key = key.split(".")[0] + "_" + num
+        return key
+
+    def load_concepts(self):
+        path = (
+            self.base_metadata_dir
+            / "low-resource_support_sets"
+            / "data"
+            / "test_keywords.txt"
+        )
+        return load(path, lambda line: line.strip())
+
+    @cached_property
+    def captions(self):
+        splits = ["train", "dev", "test"]
+        path = (
+            self.base_dir
+            / "flickr8k-yoruba"
+            / "Flickr8k_Yoruba_v6"
+            / "Flickr8k_text"
+            / "Flickr8k.token.{}_yoruba.txt"
+        )
+        path = str(path)
+        return {
+            ("S001_" + k): v
+            for split in splits
+            for k, v in load(path.format(split), self.parse_token)
+        }
+
+    def get_audio_path(self, audio_file):
+        splits = ["train", "dev", "test"]
+        for split in splits:
+            path = self.audio_dir / ("flickr_audio_yoruba_" + split) / (audio_file + ".wav")
+            if os.path.exists(path):
+                return path
+        raise ValueError
+
+    def get_image_path(self, image_file):
+        return self.image_dir / (image_file + ".jpg")
+
+    def get_audio_path_episode_concept(self, episode, concept):
+        audio_file = self.episodes[episode]["queries"][concept]
+        return self.get_audio_path(audio_file)
+
+    def get_alignment_concept(self, audio_name, concept):
+        for a in self.alignments[audio_name]:
+            if a["word"] == concept:
+                return a["time-start"], a["time-end"]
+        raise ValueError
 
 
 CONFIGS = {
@@ -215,14 +301,14 @@ CONFIGS = {
     "flickr-en-5-cls": {
         "num-shots": 5,
         "num-image-layers": 0,
-        "data-class": FlickrData,
+        "data-class": FlickrEnData,
         "task": "classification",
         "model-name": "flickr-en-5",
     },
     "flickr-yo-5-cls": {
         "num-shots": 5,
         "num-image-layers": 0,
-        "data-class": YFACCData,
+        "data-class": FlickrYoData,
         "task": "classification",
         "model-name": "flickr-yo-5",
     },

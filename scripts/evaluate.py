@@ -63,6 +63,7 @@ class Results:
                 "score": scores[episode_matching_set_images.index(image_file)],
                 "image-file": image_file,
                 "image-concept": category,
+                # "is-query": category == concept,
                 "is-query-in-caption": self.is_query_in_caption(concept, image_file),
                 "is-query-in-image": self.is_query_in_image(concept, image_file),
             }
