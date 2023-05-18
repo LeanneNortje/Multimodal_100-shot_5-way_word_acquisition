@@ -12,6 +12,7 @@ from typing import Any
 
 import click
 import numpy as np
+import textgrid
 import torch
 
 from tqdm import tqdm
@@ -79,7 +80,8 @@ class COCOData(Dataset):
 
     @cached_property
     def alignments(self):
-        return self.load_alignments()
+        concepts = self.load_concepts()
+        return self.load_alignments(concepts)
 
     def load_captions(self):
         with open(self.audio_coco_dir / "SpokenCOCO_val.json", "r") as f:
@@ -95,7 +97,9 @@ class COCOData(Dataset):
         audio_file, _ = self.episodes[episode]["queries"][concept]
         return self.get_audio_path(audio_file)
 
-    def get_alignment_concept(self, audio_name, concept):
+    def get_alignment_episode_concept(self, episode, concept):
+        audio_file, _ = self.episodes[episode]["queries"][concept]
+        audio_name = Path(audio_file).stem
         return self.alignments[audio_name][concept]
 
 
@@ -179,8 +183,9 @@ class FlickrEnData(Dataset):
         audio_file = self.episodes[episode]["queries"][concept]
         return self.get_audio_path(audio_file)
 
-    def get_alignment_concept(self, audio_name, concept):
-        for a in self.alignments[audio_name]:
+    def get_alignment_episode_concept(self, episode, concept):
+        audio_file = self.episodes[episode]["queries"][concept]
+        for a in self.alignments[audio_file]:
             if a["word"] == concept:
                 return a["time-start"], a["time-end"]
         raise ValueError
@@ -195,7 +200,8 @@ class FlickrYoData(Dataset):
         self.base_metadata_dir = Path("/home/doneata/work/mattnet-yfacc")
         self.path_episodes = (
             self.base_metadata_dir
-            / "low-resource_support_sets"
+            # / "low-resource_support_sets"
+            / "super_5-shot_5-way_yoruba"
             / "data"
             / "test_episodes.npz"
         )
@@ -237,6 +243,24 @@ class FlickrYoData(Dataset):
         )
         return load(path, lambda line: line.strip())
 
+    def load_alignments(self):
+        def load_alignments_1(key):
+            path = self.audio_dir / "Flickr8k_alignment" / (key + ".TextGrid")
+            if os.path.exists(path):
+                return [
+                    {
+                        "time-start": int(100 * i.minTime),
+                        "time-end": int(100 * i.maxTime),
+                        "word": i.mark.casefold(),
+                    }
+                    for i in textgrid.TextGrid.fromFile(path)[0]
+                    if i.mark
+                ]
+            else:
+                return []
+
+        return {key: load_alignments_1(key) for key in self.captions.keys()}
+
     @cached_property
     def captions(self):
         splits = ["train", "dev", "test"]
@@ -249,18 +273,30 @@ class FlickrYoData(Dataset):
         )
         path = str(path)
         return {
-            ("S001_" + k): v
+            k: v
             for split in splits
             for k, v in load(path.format(split), self.parse_token)
         }
 
-    def get_audio_path(self, audio_file):
+    def find_split(self, audio_file):
         splits = ["train", "dev", "test"]
         for split in splits:
-            path = self.audio_dir / ("flickr_audio_yoruba_" + split) / (audio_file + ".wav")
+            path = (
+                self.audio_dir
+                / ("flickr_audio_yoruba_" + split)
+                / ("S001_" + audio_file + ".wav")
+            )
             if os.path.exists(path):
-                return path
-        raise ValueError
+                return split
+        raise ValueError(f"Could not find audio file {audio_file}")
+
+    def get_audio_path(self, audio_file):
+        split = self.find_split(audio_file)
+        return (
+            self.audio_dir
+            / ("flickr_audio_yoruba_" + split)
+            / ("S001_" + audio_file + ".wav")
+        )
 
     def get_image_path(self, image_file):
         return self.image_dir / (image_file + ".jpg")
@@ -269,9 +305,11 @@ class FlickrYoData(Dataset):
         audio_file = self.episodes[episode]["queries"][concept]
         return self.get_audio_path(audio_file)
 
-    def get_alignment_concept(self, audio_name, concept):
-        for a in self.alignments[audio_name]:
-            if a["word"] == concept:
+    def get_alignment_episode_concept(self, episode, concept):
+        concept_yo = self.concept_to_yoruba[concept]
+        audio_file = self.episodes[episode]["queries"][concept]
+        for a in self.alignments[audio_file]:
+            if a["word"] == concept_yo:
                 return a["time-start"], a["time-end"]
         raise ValueError
 
@@ -297,6 +335,13 @@ CONFIGS = {
         "data-class": COCOData,
         "task": "retrieval",
         "model-name": "100-loc",
+    },
+    "100-loc-v2": {
+        "num-shots": 100,
+        "num-image-layers": 0,
+        "data-class": COCOData,
+        "task": "retrieval",
+        "model-name": "100-loc-v2",
     },
     "flickr-en-5-cls": {
         "num-shots": 5,
@@ -438,13 +483,16 @@ def compute_image_embeddings(mattnet, image_paths):
     return image_embeddings
 
 
-def compute_scores(mattnet, image_paths, audio, config_name):
-    image_emb = cache_np(
-        f"data/image_embeddings_matching_set_{config_name}.npy",
-        compute_image_embeddings,
-        mattnet=mattnet,
-        image_paths=image_paths,
-    )
+def compute_scores(mattnet, image_paths, audio, *, config_name, to_cache):
+    if to_cache:
+        image_emb = cache_np(
+            f"data/image_embeddings_matching_set_{config_name}.npy",
+            compute_image_embeddings,
+            mattnet=mattnet,
+            image_paths=image_paths,
+        )
+    else:
+        image_emb = compute_image_embeddings(mattnet, image_paths)
     image_emb = torch.tensor(image_emb)
     image_emb = image_emb.view(image_emb.size(0), image_emb.size(1), -1)
     image_emb = image_emb.transpose(1, 2)
@@ -473,6 +521,7 @@ def main(config_name):
     concepts = dataset.load_concepts()
 
     if task == "retrieval":
+        to_cache = True
         image_paths = [
             dataset.get_image_path(image) for image in dataset.image_matching_set
         ]
@@ -481,7 +530,7 @@ def main(config_name):
             return image_paths
 
     elif task == "classification":
-
+        to_cache = False
         def get_image_paths(episode):
             return [
                 dataset.get_image_path(im)
@@ -495,9 +544,14 @@ def main(config_name):
         concept_str = concept.replace(" ", "-")
 
         audio_path = dataset.get_audio_path_episode_concept(episode, concept)
-        alignment = dataset.get_alignment_concept(audio_path.stem, concept)
-        audio = mattnet.load_audio_1(audio_path, alignment)
         image_paths = get_image_paths(episode)
+
+        try:
+            alignment = dataset.get_alignment_episode_concept(episode, concept)
+        except ValueError:
+            return
+
+        audio = mattnet.load_audio_1(audio_path, alignment)
 
         return cache_np(
             f"data/scores-{config_name}/{concept_str}-{episode}.npy",
@@ -505,7 +559,8 @@ def main(config_name):
             mattnet,
             image_paths,
             audio,
-            config_name,
+            config_name=config_name,
+            to_cache=to_cache,
         )
 
     for episode in range(dataset.NUM_EPISODES):
