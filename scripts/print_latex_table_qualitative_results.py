@@ -5,13 +5,16 @@ import pandas as pd
 from pathlib import Path
 from toolz import concat
 
-from predict import load_concepts
-from evaluate import Results
+from predict import COCOData
+from evaluate import COCOResults
 
 
 episode = 0
-concepts = load_concepts()
-results = Results()
+config_name = os.environ.get("CONFIG", "100-loc-v2-ret")
+
+dataset = COCOData()
+concepts = dataset.load_concepts()
+results = COCOResults(config_name, dataset)
 
 
 def load1(concept):
@@ -30,7 +33,7 @@ def load1(concept):
         image_name = Path(datum["image-file"]).stem
         datum["image"] = template_img(os.path.join("imgs", image_name + ".jpg"))
         datum["explanation"] = template_img(
-            os.path.join("imgs", image_name + "-explanation.jpg")
+            os.path.join("imgs", image_name + "-explanation-attention.jpg")
         )
 
     return data

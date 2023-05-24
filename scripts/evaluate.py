@@ -63,7 +63,7 @@ class Results:
                 "score": scores[episode_matching_set_images.index(image_file)],
                 "image-file": image_file,
                 "image-concept": category,
-                # "is-query": category == concept,
+                "is-query": category == concept,  # TODO Use this as "label-type"
                 "is-query-in-caption": self.is_query_in_caption(concept, image_file),
                 "is-query-in-image": self.is_query_in_image(concept, image_file),
             }
@@ -91,7 +91,9 @@ class COCOResults(Results):
         return len(self.get_coco_annots(image_file, concept)) > 0
 
     def is_query_in_caption(self, concept, image_file):
-        return concept in self.dataset.load_caption(image_file)
+        captions = self.dataset.captions_image[image_file]
+        words = " ".join(captions).lower().split()
+        return any(concept == word for word in words)
 
 
 class FlickrResults(Results):

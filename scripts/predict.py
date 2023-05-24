@@ -83,9 +83,36 @@ class COCOData(Dataset):
         concepts = self.load_concepts()
         return self.load_alignments(concepts)
 
-    def load_captions(self):
-        with open(self.audio_coco_dir / "SpokenCOCO_val.json", "r") as f:
+    def load_captions_data(self):
+        with open(self.audio_dir / "SpokenCOCO_val.json", "r") as f:
             return json.load(f)["data"]
+
+    @cached_property
+    def captions_audio(self):
+        def parse_entry(entry):
+            return entry["wav"], entry["text"]
+
+        captions_data = self.load_captions_data()
+        return dict(
+            parse_entry(entry)
+            for captions in captions_data
+            for entry in captions["captions"]
+        )
+
+    @cached_property
+    def captions_image(self):
+        def parse_entry(entry):
+            image_file = entry["image"]
+            # image_name = Path(image_file).stem
+            captions = [c["text"] for c in entry["captions"]]
+            return image_file, captions
+
+        captions_data = self.load_captions_data()
+        return dict(map(parse_entry, captions_data))
+
+    @cached_property
+    def captions(self):
+        return self.captions_audio
 
     def get_audio_path(self, audio_file):
         return self.audio_dir / audio_file
@@ -336,7 +363,14 @@ CONFIGS = {
         "task": "retrieval",
         "model-name": "100-loc",
     },
-    "100-loc-v2": {
+    "100-loc-v2-clf": {
+        "num-shots": 100,
+        "num-image-layers": 0,
+        "data-class": COCOData,
+        "task": "classification",
+        "model-name": "100-loc-v2",
+    },
+    "100-loc-v2-ret": {
         "num-shots": 100,
         "num-image-layers": 0,
         "data-class": COCOData,
@@ -531,6 +565,7 @@ def main(config_name):
 
     elif task == "classification":
         to_cache = False
+
         def get_image_paths(episode):
             return [
                 dataset.get_image_path(im)
