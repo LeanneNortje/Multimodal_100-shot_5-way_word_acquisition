@@ -61,6 +61,12 @@ class Dataset:
         # return list(sorted(matching_set))
         return self.episodes["matching_set"].keys()
 
+    def translate_concept(self, concept):
+        return concept
+
+    def back_translate_concept(self, concept):
+        return concept
+
 
 class COCOData(Dataset):
     def __init__(self):
@@ -157,6 +163,12 @@ class FlickrEnData(Dataset):
         return key
 
     @staticmethod
+    def get_image_id(t):
+        id1, _ = t
+        parts = id1.split("_")
+        return "_".join(parts[:-1])
+
+    @staticmethod
     def parse_ctm(line):
         key, _, time_start, duration, word = line.split()
         key = FlickrEnData.reformat_key(key)
@@ -200,6 +212,15 @@ class FlickrEnData(Dataset):
         path = self.base_dir / "flickr8k-text" / f"Flickr8k.token.txt"
         return dict(load(path, self.parse_token))
 
+    @cached_property
+    def captions_image(self):
+        captions = self.captions.items()
+        captions = sorted(captions, key=self.get_image_id)
+        return {
+            image_file: [caption for _, caption in group]
+            for image_file, group in groupby(captions, key=self.get_image_id)
+        }
+
     def get_audio_path(self, audio_file):
         return self.audio_dir / (audio_file + ".wav")
 
@@ -218,6 +239,7 @@ class FlickrEnData(Dataset):
         raise ValueError
 
 
+
 class FlickrYoData(Dataset):
     def __init__(self):
         self.base_dir = Path("/home/doneata/data")
@@ -227,10 +249,9 @@ class FlickrYoData(Dataset):
         self.base_metadata_dir = Path("/home/doneata/work/mattnet-yfacc")
         self.path_episodes = (
             self.base_metadata_dir
-            # / "low-resource_support_sets"
-            / "super_5-shot_5-way_yoruba"
+            / "low-resource_support_sets"
             / "data"
-            / "test_episodes.npz"
+            / "yoruba_test_episodes.npz"
         )
 
         path = (
@@ -241,6 +262,13 @@ class FlickrYoData(Dataset):
             / "eng_yoruba_keywords.txt"
         )
         self.concept_to_yoruba = dict(load(path, lambda line: line.strip().split(", ")))
+        self.yoruba_to_concept = {v: k for k, v in self.concept_to_yoruba.items()}
+
+    def translate_concept(self, concept):
+        return self.concept_to_yoruba[concept]
+
+    def back_translate_concept(self, concept):
+        return self.yoruba_to_concept[concept]
 
     @staticmethod
     def parse_token(line):
@@ -270,11 +298,32 @@ class FlickrYoData(Dataset):
         )
         return load(path, lambda line: line.strip())
 
+    def load_alignment_leanne(self, path):
+        import textgrids
+        grid = textgrids.TextGrid(path)
+        alignments = []
+        for interval in grid['words']:
+            x = str(interval).split()
+            label = str(interval).split('"')[1]
+            start = x[-2].split('=')[-1]
+            dur = x[-1].split('=')[-1].split('>')[0]
+            if label == "": continue
+            alignments.append({
+                "time-start": int(float(start) * 100),
+                "time-end": int(float(dur) * 100),
+                "word": label,
+            })
+        return alignments
+
     def load_alignments(self):
         def load_alignments_1(key):
             path = self.audio_dir / "Flickr8k_alignment" / (key + ".TextGrid")
             if os.path.exists(path):
-                return [
+                # try:
+                #     alignments_leanne = self.load_alignment_leanne(path)
+                # except:
+                #     pdb.set_trace()
+                alignments = [
                     {
                         "time-start": int(100 * i.minTime),
                         "time-end": int(100 * i.maxTime),
@@ -283,6 +332,7 @@ class FlickrYoData(Dataset):
                     for i in textgrid.TextGrid.fromFile(path)[0]
                     if i.mark
                 ]
+                return alignments
             else:
                 return []
 
@@ -303,6 +353,15 @@ class FlickrYoData(Dataset):
             k: v
             for split in splits
             for k, v in load(path.format(split), self.parse_token)
+        }
+
+    @cached_property
+    def captions_image(self):
+        captions = self.captions.items()
+        captions = sorted(captions, key=FlickrEnData.get_image_id)
+        return {
+            image_file: [caption for _, caption in group]
+            for image_file, group in groupby(captions, key=FlickrEnData.get_image_id)
         }
 
     def find_split(self, audio_file):
@@ -328,17 +387,26 @@ class FlickrYoData(Dataset):
     def get_image_path(self, image_file):
         return self.image_dir / (image_file + ".jpg")
 
+    def trim_prefix(self, audio_file):
+        prefix, *parts = audio_file.split("_")
+        assert prefix == "S001"
+        return "_".join(parts) 
+
     def get_audio_path_episode_concept(self, episode, concept):
-        audio_file = self.episodes[episode]["queries"][concept]
+        concept_yo = self.concept_to_yoruba[concept]
+        audio_file = self.episodes[episode]["queries"][concept_yo]
+        audio_file = self.trim_prefix(audio_file)
         return self.get_audio_path(audio_file)
 
     def get_alignment_episode_concept(self, episode, concept):
         concept_yo = self.concept_to_yoruba[concept]
-        audio_file = self.episodes[episode]["queries"][concept]
+        audio_file = self.episodes[episode]["queries"][concept_yo]
+        audio_file = self.trim_prefix(audio_file)
         for a in self.alignments[audio_file]:
             if a["word"] == concept_yo:
                 return a["time-start"], a["time-end"]
         raise ValueError
+
 
 
 CONFIGS = {
@@ -390,6 +458,13 @@ CONFIGS = {
         "data-class": FlickrYoData,
         "task": "classification",
         "model-name": "flickr-yo-5",
+    },
+    "flickr-yo-5-pretrained-cls": {
+        "num-shots": 5,
+        "num-image-layers": 0,
+        "data-class": FlickrYoData,
+        "task": "classification",
+        "model-name": "flickr-yo-5-pretrained",
     },
 }
 
@@ -581,11 +656,7 @@ def main(config_name):
         audio_path = dataset.get_audio_path_episode_concept(episode, concept)
         image_paths = get_image_paths(episode)
 
-        try:
-            alignment = dataset.get_alignment_episode_concept(episode, concept)
-        except ValueError:
-            return
-
+        alignment = dataset.get_alignment_episode_concept(episode, concept)
         audio = mattnet.load_audio_1(audio_path, alignment)
 
         return cache_np(

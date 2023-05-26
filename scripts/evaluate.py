@@ -13,7 +13,7 @@ from pycocotools.coco import COCO
 
 # from sklearn.metrics import top_k_accuracy_score
 
-from predict import CONFIGS, COCOData
+from predict import CONFIGS, COCOData, FlickrEnData, FlickrYoData
 
 
 class Results:
@@ -29,17 +29,23 @@ class Results:
         self.config_name = config_name
         self.load = LOADERS[task]
 
+    def _load_scores(self, concept, episode):
+        concept_str = concept.replace(" ", "-")
+        path = f"data/scores-{self.config_name}/{concept_str}-{episode}.npy"
+        scores = np.load(path)
+        return scores
+
     def is_query_in_caption(self, concept, image_file):
-        raise NotImplementedError
+        concept_lang = self.dataset.translate_concept(concept)
+        captions = self.dataset.captions_image[image_file]
+        words = " ".join(captions).lower().split()
+        return any(concept_lang == word for word in words)
 
     def is_query_in_image(self, concept, image_file):
         raise NotImplementedError
 
     def load_retrieval(self, concept, episode):
-        concept_str = concept.replace(" ", "-")
-        path = f"data/scores-{self.config_name}/{concept_str}-{episode}.npy"
-        scores = np.load(path)
-
+        scores = self._load_scores(concept, episode)
         return [
             {
                 "score": scores[i],
@@ -51,9 +57,10 @@ class Results:
         ]
 
     def load_classification(self, concept, episode):
-        concept_str = concept.replace(" ", "-")
-        path = f"data/scores-{self.config_name}/{concept_str}-{episode}.npy"
-        scores = np.load(path)
+        try:
+            scores = self._load_scores(concept, episode)
+        except FileNotFoundError:
+            return []
 
         episode_matching_set = self.dataset.episodes[episode]["matching_set"]
         episode_matching_set_images = list(episode_matching_set.values())
@@ -90,13 +97,16 @@ class COCOResults(Results):
     def is_query_in_image(self, concept, image_file):
         return len(self.get_coco_annots(image_file, concept)) > 0
 
-    def is_query_in_caption(self, concept, image_file):
-        captions = self.dataset.captions_image[image_file]
-        words = " ".join(captions).lower().split()
-        return any(concept == word for word in words)
+
+class FlickrEnResults(Results):
+    def __init__(self, config_name, dataset):
+        super().__init__(config_name, dataset)
+
+    def is_query_in_image(self, concept, image_file):
+        return None
 
 
-class FlickrResults(Results):
+class FlickrYoResults(Results):
     def __init__(self, config_name, dataset):
         super().__init__(config_name, dataset)
 
@@ -104,9 +114,10 @@ class FlickrResults(Results):
         return None
 
     def is_query_in_caption(self, concept, image_file):
-        captions = [self.dataset.captions[image_file + "_" + str(num)] for num in range(5)]
-        words = " ".join(captions).lower().split()
-        return any(concept == word for word in words)
+        concept_lang = self.dataset.translate_concept(concept)
+        alignment = self.dataset.alignments[image_file + "_0"]
+        words = [a["word"].lower() for a in alignment]
+        return concept_lang in words
 
 
 def evaluate_classification(
@@ -121,24 +132,37 @@ def evaluate_classification(
     ]
     df = pd.DataFrame(data)
 
-    try:
-        true = df[df[label_type]][["image-file", "concept"]].set_index("image-file")
-        pred = df.pivot("image-file", "concept", "score").idxmax(1)
-    except:
-        return None
+    true = df[df[label_type]].groupby("image-file")["concept"].agg(lambda s: s.tolist())
+    true = true.to_frame("true-concepts").reset_index()
 
-    true_pred = true.join(pred.to_frame("pred"))
+    pred_cols = ["image-file", "concept", "score"]
+    pred = df[pred_cols].drop_duplicates().pivot(*pred_cols).idxmax(0)
+    pred = pred.to_frame("pred-image-file").reset_index()
+    # try:
+    #     # true = df[df[label_type]][["image-file", "concept"]].set_index("image-file")
+    # except:
+    #     return None
+
+    true_pred = pred.merge(
+        right=true, left_on="pred-image-file", right_on="image-file", how="left"
+    )
+    true_pred["is-correct"] = 100 * true_pred.apply(
+        lambda x: isinstance(x["true-concepts"], list)
+        and x["concept"] in x["true-concepts"],
+        axis=1,
+    )
+
+    # true_pred = true.join(pred.to_frame("pred"))
     # num_match = (true_pred["concept"] == true_pred["pred"]).sum()
     # num_total = len(true_pred)
     # return 100 * num_match / num_total
 
-    is_correct = true_pred["concept"] == true_pred["pred"]
-    true_pred = true_pred.join(is_correct.to_frame("is-correct"))
-    counts = true_pred.groupby("concept")["is-correct"].agg(
-        num_match="sum", num_total="size"
-    )
+    # true_pred["is-correct"] = true_pred["concept"] == true_pred["pred"]
+    # counts = true_pred.groupby("concept")["is-correct"].agg(
+    #     num_match="sum", num_total="size"
+    # )
 
-    return counts
+    return dict(true_pred[["concept", "is-correct"]].values.tolist())
 
 
 def evaluate_retrieval(results, label_type):
@@ -169,8 +193,12 @@ def main(config_name):
 
     if config["data-class"] == COCOData:
         Results = COCOResults
+    elif config["data-class"] == FlickrEnData:
+        Results = FlickrEnResults
+    elif config["data-class"] == FlickrYoData:
+        Results = FlickrYoResults
     else:
-        Results = FlickrResults
+        raise ValueError(config["data-class"])
 
     concepts = dataset.load_concepts()
     results = Results(config_name, dataset)
@@ -181,11 +209,19 @@ def main(config_name):
         evaluate(concepts, results, episode=episode)
         for episode in tqdm(range(NUM_EPISODES))
     ]
-    counts = [c for c in counts if c is not None]
-    print(len(counts))
-    counts = reduce(lambda x, y: x.add(y), counts)
-    # print("accuracy")
-    print(100 * counts["num_match"] / counts["num_total"])
+
+    def compute_average(counts, concept):
+        counts1 = [counts.get(concept, None) for counts in counts]
+        counts1 = [count for count in counts1 if count is not None]
+        return np.mean(counts1)
+
+    results = {concept: compute_average(counts, concept) for concept in concepts}
+    print(results)
+    # counts = [c for c in counts if c is not None]
+    # print(len(counts))
+    # counts = reduce(lambda x, y: x.add(y), counts)
+    # # print("accuracy")
+    # print(100 * counts["num_match"] / counts["num_total"])
     # print("accuracy: {:.2f}±{:.1f}".format(np.mean(accs), np.std(accs)))
 
     # metrics = [
