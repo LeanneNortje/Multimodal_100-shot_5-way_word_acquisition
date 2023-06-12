@@ -60,7 +60,7 @@ def load_data() -> List[Datum]:
         folder = datasets["english"].base_metadata_dir
         path = (
             folder
-            / ("super_5-shot_5-way_" + lang)
+            / ("5-shot_5-way_" + lang)
             / "data"
             / "audio_pair_lists"
             / (concept + ".txt")
