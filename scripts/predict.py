@@ -479,7 +479,7 @@ def cache_np(path, func, *args, **kwargs):
 
 
 class MattNet(nn.Module):
-    def __init__(self, config_name, device="cpu"):
+    def __init__(self, config_name, device="cpu", do_not_load=False):
         super().__init__()
 
         config = CONFIGS[config_name]
@@ -515,12 +515,13 @@ class MattNet(nn.Module):
         image_model = self.build_image_model(self.args)
         attention_model = ScoringAttentionModule(self.args)
 
-        path_checkpoint = self.model_dir / "models" / "best_ckpt.pt"
-        state = torch.load(path_checkpoint, map_location=device)
+        if not do_not_load:
+            path_checkpoint = self.model_dir / "models" / "best_ckpt.pt"
+            state = torch.load(path_checkpoint, map_location=device)
 
-        audio_model.load_state_dict(self.fix_ddp_module(state["audio_model"]))
-        image_model.load_state_dict(self.fix_ddp_module(state["image_model"]))
-        attention_model.load_state_dict(self.fix_ddp_module(state["attention"]))
+            audio_model.load_state_dict(self.fix_ddp_module(state["audio_model"]))
+            image_model.load_state_dict(self.fix_ddp_module(state["image_model"]))
+            attention_model.load_state_dict(self.fix_ddp_module(state["attention"]))
 
         self.audio_model = audio_model
         self.image_model = image_model
