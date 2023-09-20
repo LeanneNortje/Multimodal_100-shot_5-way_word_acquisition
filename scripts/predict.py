@@ -31,9 +31,9 @@ from test_DH_few_shot_test_with_sampled_queries import (
 
 
 MODEL_DIR = Path("model_metadata/spokencoco_train/AudioModel-Transformer_ImageModel-Resnet50_ArgumentsHash-2560499dfc_ConfigFile-params")
-BASE_DIR = Path("/mnt/private-share/speechDatabases")
-AUDIO_COCO_DIR = BASE_DIR / "spoken-coco"
-IMAGE_COCO_DIR = BASE_DIR / "coco"
+BASE_DIR = Path("../Datasets/spokencoco")
+AUDIO_COCO_DIR = BASE_DIR / "SpokenCOCO"
+IMAGE_COCO_DIR = BASE_DIR
 
 
 with open(MODEL_DIR / "args.pkl", "rb") as f:
