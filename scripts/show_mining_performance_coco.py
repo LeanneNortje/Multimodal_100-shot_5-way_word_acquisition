@@ -8,17 +8,17 @@ import streamlit as st
 
 # data taken from paper
 tables_str = {
-    "few-shot retrieval": r"""K & brocolli & fire hydrant & kite & sheep & zebra\\
+    "few-shot retrieval": r"""K & broccoli & fire hydrant & kite & sheep & zebra\\
 5 & 40.4 & 11.3 & 27.5 & 33.3 & 77.8\\
 10 & 49.1 & 9.7 & 30.8 & 33.3 & 85.6\\
 50 & 50.9 & 8.1 & 20.9 & 36.5 & 82.2\\
 100 & 52.6 & 4.8 & 33.0 & 38.1 & 80.0\\""",
-    "audio mining": r"""K & brocolli & fire hydrant & kite & sheep & zebra\\
+    "audio mining": r"""K & broccoli & fire hydrant & kite & sheep & zebra\\
 5 & 95.4 & 97.7 & 57.0 & 63.3 & 91.9\\
 10 & 90.5 & 97.7 & 57.5 & 70.7 & 98.7\\
 50 & 85.9 & 97.5 & 51.7 & 93.1 & 98.9\\
 100 & 93.9 & 97.6 & 54.7 & 92.4 & 99.4\\""",
-    "image mining": r"""K & brocolli & fire hydrant & kite & sheep & zebra\\
+    "image mining": r"""K & broccoli & fire hydrant & kite & sheep & zebra\\
 5 & 53.1 & 6.0 & 38.8 & 38.2 & 83.6\\
 10 & 59.7 & 6.7 & 45.1 & 38.5 & 87.5\\
 50 & 60.3 & 16.15 & 32.8 & 39.9 & 90.9\\
@@ -61,22 +61,37 @@ def parse_all(tables_str):
     return df
 
 
+NUMS = {
+    "broccoli": "broccoli (57)",
+    "fire hydrant": "fire hyrdant (62)",
+    "kite": "kite (91)",
+    "sheep": "sheep (63)",
+    "zebra": "zebra (90)",
+}
+
+
 st.set_page_config(layout="wide")
 
 df = parse_all(tables_str)
+df["keyword-with-num"] = df["keyword"].map(NUMS)
 df
 
-sns.set_context("talk")
+sns.set_context("poster")
 fig = sns.relplot(
     data=df,
     x="K",
     y="precision",
     hue="task",
     style="task",
-    col="keyword",
+    col="keyword-with-num",
     kind="line",
     markers=True,
 )
+
 fig.set(xticklabels=mapt(str, Ks))
+fig.set_titles("{col_name}")
+fig.set(ylabel="Precision (%)")
+fig._legend.set_title("Task")
 
 st.pyplot(fig)
+fig.savefig("output/taslp/mining-performance-coco.pdf")

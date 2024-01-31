@@ -16,7 +16,7 @@ from toolz import assoc
 from predict import FlickrEnData, FlickrYoData
 from utils import load
 
-sns.set_context("talk")
+sns.set_context("poster")
 
 Datum = TypedDict(
     "Datum",
@@ -128,16 +128,22 @@ def main():
     df_tail
 
     df["language"] = df["language"].replace("yoruba", "yorùbá")
+    df["language"] = df["language"].str.capitalize()
 
     fig = sns.relplot(
         data=df, x="rank", y="precision", hue="concept", col="language", kind="line"
     )
+    fig.set_titles("{col_name}")
+    fig.set(xlabel="Rank", ylabel="Precision (%)")
+    fig._legend.set_title("Keyword")
     # sns.lineplot(data=df, x="score", y="precision", hue="concept", ax=axs[1])
     # sns.move_legend(axs[0], "upper left", bbox_to_anchor=(1, 1))
     # fig.tight_layout()
     st.pyplot(fig)
-    path = "output/taslp/mining-precision-flickr-audio-en-yo.png"
-    fig.savefig(path, dpi=300)
+    # path = "output/taslp/mining-precision-flickr-audio-en-yo.png"
+    # fig.savefig(path, dpi=300)
+    path = "output/taslp/mining-precision-flickr-audio-en-yo.pdf"
+    fig.savefig(path)
 
     # show(data, concept, language)
 

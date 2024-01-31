@@ -51,7 +51,7 @@ from evaluate import COCOResults
 st.set_page_config(layout="wide")
 
 
-TO_SAVE_DATA_FOR_PAPER = True
+TO_SAVE_DATA_FOR_PAPER = False
 config_name = os.environ.get("CONFIG", "100-loc-v2-ret")
 
 dataset = COCOData()
@@ -68,6 +68,7 @@ with st.sidebar:
         "episode no.", min_value=0, max_value=1000, format="%d", step=1
     )
     vis_type = st.selectbox("explanation", ["attention", "grad-cam"])
+    τ = st.slider("threshold", min_value=0.0, max_value=1.0, value=0.5, step=0.01)
 
 audio_query, _ = results.dataset.episodes[episode_no]["queries"][query_concept]
 audio_path = dataset.get_audio_path(audio_query)
@@ -157,7 +158,7 @@ for datum in data:
         score, attention = mattnet(audio, image)
 
     # original image
-    image_rgb = Image.open(image_path)
+    image_rgb = mage.open(image_path)
     image_rgb = image_rgb.convert("RGB")
 
     # image_rgb = image_rgb.resize(IMG_SIZE)
@@ -176,6 +177,8 @@ for datum in data:
 
     explanation = Image.fromarray(explanation).resize((w, h))
     explanation = np.array(explanation)
+    explanation_binary = explanation > τ
+    explanation_binary = 255 * explanation_binary.astype(np.uint8)
     image_explanation = show_cam_on_image(image_rgb, explanation, use_rgb=True)
 
     if TO_SAVE_DATA_FOR_PAPER:
@@ -199,7 +202,7 @@ for datum in data:
     st.markdown("rank: {}".format(datum["rank"]))
     st.markdown("image name: `{}`".format(image_name))
 
-    cols = st.columns(3)
+    cols = st.columns(4)
 
     cols[0].markdown("image")
     cols[0].image(str(image_path))
@@ -207,8 +210,11 @@ for datum in data:
     cols[1].markdown("explanation: " + vis_type)
     cols[1].image(image_explanation)
 
-    cols[2].markdown("annotations")
-    cols[2].image(image_annots)
+    cols[2].markdown("explanation (binary)")
+    cols[2].image(explanation_binary)
+
+    cols[3].markdown("annotations")
+    cols[3].image(image_annots)
 
     captions_for_image = dataset.captions_image[image_file]
     captions_for_image_str = "\n".join(f"  - `{c}`" for c in captions_for_image)
