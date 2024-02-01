@@ -79,13 +79,17 @@ class Results:
 
 
 class COCOResults(Results):
-    def __init__(self, config_name, dataset):
+    def __init__(self, config_name, dataset, split):
         super().__init__(config_name, dataset)
-        self.coco = COCO(dataset.image_dir / "annotations" / "instances_val2014.json")
+        self.coco = COCO(dataset.image_dir / "annotations" / f"instances_{split}.json")
+        self.split = split
         # self.load = self.load_retrieval
 
     def get_coco_annots(self, image_file, concept):
-        image_name = Path(image_file).stem
+        image_file = Path(image_file)
+        folder, _ = image_file.parts
+        assert folder == self.split
+        image_name = image_file.stem
         coco_image_id = [int(image_name.split("_")[-1])]
         coco_category_ids = self.coco.getCatIds(catNms=[concept])
         coco_annot_ids = self.coco.getAnnIds(
