@@ -67,6 +67,11 @@ class Dataset:
     def back_translate_concept(self, concept):
         return concept
 
+# Leanne paths
+MODEL_DIR = Path("model_metadata/spokencoco_train/AudioModel-Transformer_ImageModel-Resnet50_ArgumentsHash-2560499dfc_ConfigFile-params")
+BASE_DIR = Path("../Datasets/spokencoco")
+AUDIO_COCO_DIR = BASE_DIR / "SpokenCOCO"
+IMAGE_COCO_DIR = BASE_DIR
 
 class COCOData(Dataset):
     def __init__(self):

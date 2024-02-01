@@ -127,7 +127,7 @@ def validate(audio_model, image_model, attention, contrastive_loss, val_loader, 
         # print(ind.size(), scores.size())
         # for c in range(scores.size(1)):
         #     print(scores[0, ind[0, c].item()])
-        acc = (ind[:, 0:treshold] <= treshold).float().mean().item()
+        acc = (ind[:, 0:treshold] <= treshold).float().mean().detach().item()
 
         # scores = torch.cat([img_negatives, base_img_negatives, positives], dim=1)
         # labels = torch.zeros(positives.size(0), device=rank) + scores.size(1) - 1
@@ -186,7 +186,7 @@ def spawn_training(rank, world_size, image_base, args):
     if rank == 0: heading(f'\nSetting up image model ')
     # image_model_name = imageModel(args)
     # image_model = image_model_name(args, pretrained=args["pretrained_image_model"]).to(rank)
-    seed_model = alexnet(pretrained=True)
+    seed_model = alexnet(pretrained=False)
     image_model = nn.Sequential(*list(seed_model.features.children()))
 
     last_layer_index = len(list(image_model.children()))

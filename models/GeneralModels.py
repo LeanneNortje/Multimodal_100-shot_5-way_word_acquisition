@@ -33,6 +33,15 @@ class ScoringAttentionModule(nn.Module):
         # nn.LayerNorm(49),
         # nn.Linear(49, 49),
         # nn.ReLU()
+        # Leanne version
+        # self.image_encoder = nn.Sequential(
+            # # nn.LayerNorm(49),
+            # nn.Linear(49, 49),
+            # # nn.ReLU(),
+            # # nn.LayerNorm(49),
+            # nn.Linear(49, 49),
+            # # nn.ReLU()
+        # )
         # self.similarity = nn.Sequential(
         #     # nn.LayerNorm(49),
         #     nn.Linear(49, 49),

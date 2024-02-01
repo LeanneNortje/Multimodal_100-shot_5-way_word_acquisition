@@ -50,7 +50,7 @@ def compute_matchmap_similarity_matrix_loss(
     # base_negatives = torch.cat([base_neg_im_s, base_neg_im_s], dim=0)
     # loss = contrastive_loss(anch, positives, negatives, base_negatives) 
 
-    loss = contrastive_loss(s_anchor, pos_aud_s, neg_aud_s, base_neg_im_s) 
-    # loss += contrastive_loss(s_anchor, pos_im_s, neg_im_s, None) 
+    loss = contrastive_loss(s_anchor, pos_aud_s, neg_aud_s, None) 
+    loss += contrastive_loss(s_anchor, pos_im_s, neg_im_s, base_neg_im_s) 
 
     return loss
