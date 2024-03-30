@@ -1,10 +1,8 @@
 # Multimodal_100-shot_5-way_word_acquisition
 
+Note: [this repo](https://github.com/LeanneNortje/few-shot_word_acquisition/tree/main) improves apon this one. For more specific instructions, the exact same steps can be followed. With this repo, data paths within scripts should be changed manually. 
+
 Download [our sampled support set](https://github.com/LeanneNortje/Mulitmodal_few-shot_word_acquisition) and extract this folder in the project main folder.
-
-Download [our data folder containing the exact test episodes we use](https://drive.google.com/file/d/11R191vRZGRs6qDtym1aOEype9S41LiVc/view?usp=sharing) and extract this folder in the project main folder.
-
-Download [trained model weights](https://drive.google.com/file/d/17fatYvXIZRephWx8MPhtGg_BbE1EOpgp/view?usp=sharing) and extract this folder in the project main folder.
 
 To train a model, run the python script ```run.py```.
 
