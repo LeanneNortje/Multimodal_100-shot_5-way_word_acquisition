@@ -158,7 +158,7 @@ for datum in data:
         score, attention = mattnet(audio, image)
 
     # original image
-    image_rgb = mage.open(image_path)
+    image_rgb = Image.open(image_path)
     image_rgb = image_rgb.convert("RGB")
 
     # image_rgb = image_rgb.resize(IMG_SIZE)
