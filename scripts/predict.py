@@ -569,6 +569,15 @@ class MyNet(nn.Module):
         return audio
 
 
+def load_cpc_model(audio_model, state):
+    model_dict = audio_model.state_dict()
+    for key in state["acoustic_model"]:
+        if key in model_dict:
+            model_dict[key] = state["acoustic_model"][key]
+    audio_model.load_state_dict(model_dict)
+    return audio_model
+
+
 class DavidHarwathNet(MyNet):
     def __init__(self, config_name, device="cpu", to_load=("audio", "image"), image_model_pretrained=True):
         super().__init__(config_name)
@@ -580,7 +589,10 @@ class DavidHarwathNet(MyNet):
             path_checkpoint = self.model_dir / "models" / "best_ckpt.pt"
             state = torch.load(path_checkpoint, map_location=device)
 
-        if "audio" in to_load:
+        if "audio" in to_load and config_name == "pretrained-cpc":
+            audio_model = load_cpc_model(audio_model, state)
+
+        if "audio" in to_load and config_name != "pretrained-cpc":
             audio_model.load_state_dict(self.fix_ddp_module(state["audio_model"]))
 
         if "image" in to_load:
