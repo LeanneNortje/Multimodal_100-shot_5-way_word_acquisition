@@ -542,7 +542,7 @@ class MyNet(nn.Module):
         return OrderedDict([(rm_prefix(k), v) for k, v in state.items()])
 
     @staticmethod
-    def build_image_model(args, pretrained):
+    def build_image_model(args, *, pretrained):
         seed_model = alexnet(pretrained=pretrained)
         image_model = nn.Sequential(*list(seed_model.features.children()))
 
@@ -574,7 +574,7 @@ class DavidHarwathNet(MyNet):
         super().__init__(config_name)
 
         audio_model = AudioModel(self.args)
-        image_model = self.build_image_model(self.args, image_model_pretrained)
+        image_model = self.build_image_model(self.args, pretrained=image_model_pretrained)
 
         if to_load:
             path_checkpoint = self.model_dir / "models" / "best_ckpt.pt"
@@ -606,7 +606,7 @@ class MattNet(MyNet):
         super().__init__(config_name)
 
         audio_model = AudioModel(self.args)
-        image_model = self.build_image_model(self.args, image_model_pretrained)
+        image_model = self.build_image_model(self.args, pretrained=image_model_pretrained)
         attention_model = ScoringAttentionModule(self.args)
 
         if to_load:
