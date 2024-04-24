@@ -79,7 +79,7 @@ class Results:
 
 
 class COCOResults(Results):
-    def __init__(self, config_name, dataset, split):
+    def __init__(self, config_name, dataset, split="val2014"):
         super().__init__(config_name, dataset)
         self.coco = COCO(dataset.image_dir / "annotations" / f"instances_{split}.json")
         self.split = split

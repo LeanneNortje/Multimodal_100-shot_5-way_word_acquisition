@@ -21,7 +21,7 @@ from pytorch_grad_cam import GradCAM
 from pytorch_grad_cam.utils.image import show_cam_on_image
 from pytorch_grad_cam.utils.model_targets import RawScoresOutputTarget
 
-from predict import COCOData, MattNet
+from predict import COCOData, MattNet, DavidHarwathNet
 from evaluate import COCOResults
 
 st.set_page_config(layout="wide")
@@ -36,11 +36,21 @@ episode_no = 0
 
 results = COCOResults(config_name, dataset)
 
+# Randomly initialised model
+net_random = DavidHarwathNet("pretrained-cpc", to_load=(), image_model_pretrained=False)
+net_random.eval()
+
+# Model initialised with each encoder trained independently
+net_independent = DavidHarwathNet("pretrained-cpc", to_load=("audio", ), image_model_pretrained=True)
+net_independent.eval()
+
+# Model initialsed with the encoders trained jointly, but on different background data
+net_background = DavidHarwathNet("pretrained", to_load=("audio", "image"))
+net_background.eval()
+
+# Model initialised with the encoders trained jointly on the few-shot data
 mattnet = MattNet(config_name)
 mattnet.eval()
-
-mattnet_random = MattNet(config_name, do_not_load=True)
-mattnet_random.eval()
 
 
 def scale_0_100_sigmoid(attention):
@@ -103,24 +113,29 @@ for query_concept in concepts:
         image_path = dataset.get_image_path(image_file)
         image_name = image_path.stem
 
-        cols = st.columns(4)
+        cols = st.columns(5)
 
         cols[0].markdown("input image")
         cols[0].image(str(image_path))
 
-        image = get_explanation(mattnet, audio, image_path, scale_0_100_sigmoid)
-        cols[1].markdown("model: learnt · scale: 0:100 + σ")
+        image = get_explanation(net_random, audio, image_path, scale_min_max_linear)
+        cols[1].markdown("model: random · scale: min-max linear")
         cols[1].image(image)
-        save_image(image, image_name, "learnt-scale-0-100")
+        save_image(image, image_name, "harwath-random")
 
-        image = get_explanation(mattnet_random, audio, image_path, scale_0_100_sigmoid)
-        cols[2].markdown("model: random · scale: 0:100 + σ")
+        image = get_explanation(net_init, audio, image_path, scale_min_max_linear)
+        cols[2].markdown("model: independent · scale: min-max linear")
         cols[2].image(image)
-        save_image(image, image_name, "random-scale-0-100")
+        save_image(image, image_name, "harwath-independent")
 
-        image = get_explanation(mattnet_random, audio, image_path, scale_min_max_linear)
-        cols[3].markdown("model random · scale: min-max + linear")
+        image = get_explanation(net_pretrained, audio, image_path, scale_min_max_linear)
+        cols[3].markdown("model: background · scale: min-max linear")
         cols[3].image(image)
-        save_image(image, image_name, "random-scale-min-max")
+        save_image(image, image_name, "harwath-background")
+
+        image = get_explanation(mattnet, audio, image_path, scale_0_100_sigmoid)
+        cols[4].markdown("model: few-shot · scale: 0:100 + σ")
+        cols[4].image(image)
+        save_image(image, image_name, "mattnet-few-shot")
 
     st.markdown("---")

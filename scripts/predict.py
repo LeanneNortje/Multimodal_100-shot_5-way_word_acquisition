@@ -450,6 +450,20 @@ CONFIGS = {
         "task": "retrieval",
         "model-name": "100-loc-v2",
     },
+    "pretrained-cpc": {
+        "num-shots": None,
+        "num-image-layers": 0,
+        "data-class": COCOData,
+        # "task": "retrieval",
+        "model-name": "pretrained-cpc",
+    },
+    "pretrained": {
+        "num-shots": None,
+        "num-image-layers": 0,
+        "data-class": COCOData,
+        # "task": "retrieval",
+        "model-name": "pretrained",
+    },
     "flickr-en-5-cls": {
         "num-shots": 5,
         "num-image-layers": 0,
@@ -483,8 +497,8 @@ def cache_np(path, func, *args, **kwargs):
         return result
 
 
-class MattNet(nn.Module):
-    def __init__(self, config_name, device="cpu", do_not_load=False):
+class MyNet(nn.Module):
+    def __init__(self, config_name):
         super().__init__()
 
         config = CONFIGS[config_name]
@@ -516,25 +530,20 @@ class MattNet(nn.Module):
 
         self.args["num_image_layers"] = num_image_layers
 
-        audio_model = AudioModel(self.args)
-        image_model = self.build_image_model(self.args)
-        attention_model = ScoringAttentionModule(self.args)
+    @staticmethod
+    def fix_ddp_module(state):
+        # remove 'module.' of DistributedDataParallel (DDP)
+        def rm_prefix(key):
+            SEP = "."
+            prefix, *rest = key.split(SEP)
+            assert prefix == "module"
+            return SEP.join(rest)
 
-        if not do_not_load:
-            path_checkpoint = self.model_dir / "models" / "best_ckpt.pt"
-            state = torch.load(path_checkpoint, map_location=device)
-
-            audio_model.load_state_dict(self.fix_ddp_module(state["audio_model"]))
-            image_model.load_state_dict(self.fix_ddp_module(state["image_model"]))
-            attention_model.load_state_dict(self.fix_ddp_module(state["attention"]))
-
-        self.audio_model = audio_model
-        self.image_model = image_model
-        self.attention_model = attention_model
+        return OrderedDict([(rm_prefix(k), v) for k, v in state.items()])
 
     @staticmethod
-    def build_image_model(args):
-        seed_model = alexnet(pretrained=True)
+    def build_image_model(args, pretrained):
+        seed_model = alexnet(pretrained=pretrained)
         image_model = nn.Sequential(*list(seed_model.features.children()))
 
         last_layer_index = len(list(image_model.children()))
@@ -550,16 +559,72 @@ class MattNet(nn.Module):
         )
         return image_model
 
-    @staticmethod
-    def fix_ddp_module(state):
-        # remove 'module.' of DistributedDataParallel (DDP)
-        def rm_prefix(key):
-            SEP = "."
-            prefix, *rest = key.split(SEP)
-            assert prefix == "module"
-            return SEP.join(rest)
+    def load_image_1(self, image_path):
+        image = load_image(image_path, **self.kwargs_load_image)
+        return image
 
-        return OrderedDict([(rm_prefix(k), v) for k, v in state.items()])
+    def load_audio_1(self, audio_path, alignment):
+        audio, _ = load_audio(audio_path, alignment, self.args["audio_config"])
+        audio, _ = pad_audio(audio, **self.kwargs_pad_audio)
+        return audio
+
+
+class DavidHarwathNet(MyNet):
+    def __init__(self, config_name, device="cpu", to_load=("audio", "image"), image_model_pretrained=True):
+        super().__init__(config_name)
+
+        audio_model = AudioModel(self.args)
+        image_model = self.build_image_model(self.args, image_model_pretrained)
+
+        if to_load:
+            path_checkpoint = self.model_dir / "models" / "best_ckpt.pt"
+            state = torch.load(path_checkpoint, map_location=device)
+
+        if "audio" in to_load:
+            audio_model.load_state_dict(self.fix_ddp_module(state["audio_model"]))
+
+        if "image" in to_load:
+            image_model.load_state_dict(self.fix_ddp_module(state["image_model"]))
+
+        self.audio_model = audio_model
+        self.image_model = image_model
+
+    def forward(self, audio, image):
+        image_emb = self.image_model(image)
+        image_emb = image_emb.view(image_emb.size(0), image_emb.size(1), -1)
+        image_emb = image_emb.transpose(1, 2)
+        _, _, audio_emb = self.audio_model(audio)
+        att = torch.bmm(image_emb, audio_emb)
+        # att, _ = att.mean(dim=2)
+        att = att.mean(dim=2)
+        score = att.max()
+        return score, att
+
+
+class MattNet(MyNet):
+    def __init__(self, config_name, device="cpu", to_load=("audio", "image", "attention"), image_model_pretrained=True):
+        super().__init__(config_name)
+
+        audio_model = AudioModel(self.args)
+        image_model = self.build_image_model(self.args, image_model_pretrained)
+        attention_model = ScoringAttentionModule(self.args)
+
+        if to_load:
+            path_checkpoint = self.model_dir / "models" / "best_ckpt.pt"
+            state = torch.load(path_checkpoint, map_location=device)
+
+        if "audio" in to_load:
+            audio_model.load_state_dict(self.fix_ddp_module(state["audio_model"]))
+
+        if "image" in to_load:
+            image_model.load_state_dict(self.fix_ddp_module(state["image_model"]))
+
+        if "attention" in to_load:
+            attention_model.load_state_dict(self.fix_ddp_module(state["attention"]))
+
+        self.audio_model = audio_model
+        self.image_model = image_model
+        self.attention_model = attention_model
 
     def forward(self, audio, image):
         image_emb = self.image_model(image)
@@ -569,15 +634,6 @@ class MattNet(nn.Module):
         att = self.attention_model.get_attention(image_emb, audio_emb, None)
         score = att.max()
         return score, att
-
-    def load_image_1(self, image_path):
-        image = load_image(image_path, **self.kwargs_load_image)
-        return image
-
-    def load_audio_1(self, audio_path, alignment):
-        audio, _ = load_audio(audio_path, alignment, self.args["audio_config"])
-        audio, _ = pad_audio(audio, **self.kwargs_pad_audio)
-        return audio
 
 
 def compute_image_embeddings(mattnet, image_paths):
