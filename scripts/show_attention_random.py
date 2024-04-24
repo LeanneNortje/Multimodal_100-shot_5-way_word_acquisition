@@ -123,18 +123,18 @@ for query_concept in concepts:
         cols[1].image(image)
         save_image(image, image_name, "harwath-random")
 
-        image = get_explanation(net_init, audio, image_path, scale_min_max_linear)
+        image = get_explanation(net_independent, audio, image_path, scale_min_max_linear)
         cols[2].markdown("model: independent · scale: min-max linear")
         cols[2].image(image)
         save_image(image, image_name, "harwath-independent")
 
-        image = get_explanation(net_pretrained, audio, image_path, scale_min_max_linear)
-        cols[3].markdown("model: background · scale: min-max linear")
+        image = get_explanation(net_background, audio, image_path, scale_min_max_linear)
+        cols[3].markdown("model: joint on background · scale: min-max linear")
         cols[3].image(image)
         save_image(image, image_name, "harwath-background")
 
         image = get_explanation(mattnet, audio, image_path, scale_0_100_sigmoid)
-        cols[4].markdown("model: few-shot · scale: 0:100 + σ")
+        cols[4].markdown("model: joint on few-shot data · scale: 0:100 + σ")
         cols[4].image(image)
         save_image(image, image_name, "mattnet-few-shot")
 
